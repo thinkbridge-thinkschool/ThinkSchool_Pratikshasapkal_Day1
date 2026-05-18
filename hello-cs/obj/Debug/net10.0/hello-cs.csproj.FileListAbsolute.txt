@@ -1,0 +1,14 @@
+D:\thinkschool\day-1\hello-cs\bin\Debug\net10.0\hello-cs.exe
+D:\thinkschool\day-1\hello-cs\bin\Debug\net10.0\hello-cs.deps.json
+D:\thinkschool\day-1\hello-cs\bin\Debug\net10.0\hello-cs.runtimeconfig.json
+D:\thinkschool\day-1\hello-cs\bin\Debug\net10.0\hello-cs.dll
+D:\thinkschool\day-1\hello-cs\bin\Debug\net10.0\hello-cs.pdb
+D:\thinkschool\day-1\hello-cs\obj\Debug\net10.0\hello-cs.GeneratedMSBuildEditorConfig.editorconfig
+D:\thinkschool\day-1\hello-cs\obj\Debug\net10.0\hello-cs.AssemblyInfoInputs.cache
+D:\thinkschool\day-1\hello-cs\obj\Debug\net10.0\hello-cs.AssemblyInfo.cs
+D:\thinkschool\day-1\hello-cs\obj\Debug\net10.0\hello-cs.csproj.CoreCompileInputs.cache
+D:\thinkschool\day-1\hello-cs\obj\Debug\net10.0\hello-cs.dll
+D:\thinkschool\day-1\hello-cs\obj\Debug\net10.0\refint\hello-cs.dll
+D:\thinkschool\day-1\hello-cs\obj\Debug\net10.0\hello-cs.pdb
+D:\thinkschool\day-1\hello-cs\obj\Debug\net10.0\hello-cs.genruntimeconfig.cache
+D:\thinkschool\day-1\hello-cs\obj\Debug\net10.0\ref\hello-cs.dll
