@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "d:\\thinkschool\\day-1\\OrderRefactor\\QuotesApi\\QuotesApi.csproj": {}
+    "D:\\thinkschool\\day-1\\OrderRefactor\\QuotesApi\\QuotesApi.csproj": {}
   },
   "projects": {
-    "d:\\thinkschool\\day-1\\OrderRefactor\\QuotesApi\\QuotesApi.csproj": {
+    "D:\\thinkschool\\day-1\\OrderRefactor\\QuotesApi\\QuotesApi.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "d:\\thinkschool\\day-1\\OrderRefactor\\QuotesApi\\QuotesApi.csproj",
+        "projectUniqueName": "D:\\thinkschool\\day-1\\OrderRefactor\\QuotesApi\\QuotesApi.csproj",
         "projectName": "QuotesApi",
-        "projectPath": "d:\\thinkschool\\day-1\\OrderRefactor\\QuotesApi\\QuotesApi.csproj",
+        "projectPath": "D:\\thinkschool\\day-1\\OrderRefactor\\QuotesApi\\QuotesApi.csproj",
         "packagesPath": "C:\\Users\\psapk\\.nuget\\packages\\",
-        "outputPath": "d:\\thinkschool\\day-1\\OrderRefactor\\QuotesApi\\obj\\",
+        "outputPath": "D:\\thinkschool\\day-1\\OrderRefactor\\QuotesApi\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\psapk\\AppData\\Roaming\\NuGet\\NuGet.Config"

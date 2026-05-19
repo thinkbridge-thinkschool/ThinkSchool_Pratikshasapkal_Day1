@@ -1,0 +1,9 @@
+AI Reflection
+
+For the strategy-pattern refactor, Claude correctly identified that the discount logic inside OrderService was becoming difficult to extend. It separated the logic into an IDiscountStrategy abstraction with concrete implementations, which made the service cleaner and easier to extend with future discount rules. The generated structure was useful because new rules can now be added without modifying the core service logic.
+
+However, I noticed that the AI-generated refactor introduced a bug in the tests. The service constructor changed to require an IDiscountStrategy dependency, but the existing unit tests were not updated. This caused NullReferenceException failures during test execution. I had to manually review the failing tests, inspect the constructor changes, and inject the strategy properly into all test setups. This reinforced the importance of reading the diff carefully instead of blindly trusting AI-generated refactors.
+
+Copilot-style test generation saved time when creating repetitive validation tests. The generated test structures were useful starting points for scenarios like negative quantity validation and empty item lists. However, one subtle issue was that the tests exposed business rules that the service implementation itself did not yet enforce. The negative quantity test initially failed because validation logic was missing entirely. I had to manually add the validation inside OrderService.
+
+I would reach for Claude first for architectural refactoring and reasoning-heavy tasks, because it handled structural changes better. For fast repetitive test generation and boilerplate suggestions, Copilot-style assistance felt faster and more convenient.

@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "d:\\thinkschool\\day-1\\OrderRefactor\\OrderApi.Tests\\OrderApi.Tests.csproj": {}
+    "D:\\thinkschool\\day-1\\OrderRefactor\\OrderApi.Tests\\OrderApi.Tests.csproj": {}
   },
   "projects": {
-    "d:\\thinkschool\\day-1\\OrderRefactor\\OrderApi.Tests\\OrderApi.Tests.csproj": {
+    "D:\\thinkschool\\day-1\\OrderRefactor\\OrderApi.Tests\\OrderApi.Tests.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "d:\\thinkschool\\day-1\\OrderRefactor\\OrderApi.Tests\\OrderApi.Tests.csproj",
+        "projectUniqueName": "D:\\thinkschool\\day-1\\OrderRefactor\\OrderApi.Tests\\OrderApi.Tests.csproj",
         "projectName": "OrderApi.Tests",
-        "projectPath": "d:\\thinkschool\\day-1\\OrderRefactor\\OrderApi.Tests\\OrderApi.Tests.csproj",
+        "projectPath": "D:\\thinkschool\\day-1\\OrderRefactor\\OrderApi.Tests\\OrderApi.Tests.csproj",
         "packagesPath": "C:\\Users\\psapk\\.nuget\\packages\\",
-        "outputPath": "d:\\thinkschool\\day-1\\OrderRefactor\\OrderApi.Tests\\obj\\",
+        "outputPath": "D:\\thinkschool\\day-1\\OrderRefactor\\OrderApi.Tests\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\psapk\\AppData\\Roaming\\NuGet\\NuGet.Config"
