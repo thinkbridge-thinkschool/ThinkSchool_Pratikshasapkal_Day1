@@ -40,17 +40,16 @@ app.MapPost("/api/quotes", async (
     AppDbContext db,
     CancellationToken cancellationToken) =>
 {
-    var quote = new Quote
-    {
-        Author = request.Author,
-        Text = request.Text
-    };
+    var result = Quote.Create(request.Author, request.Text);
 
-    db.Quotes.Add(quote);
+    if (!result.IsSuccess)
+        return Results.Problem(detail: result.Error, statusCode: 400);
+
+    db.Quotes.Add(result.Value!);
 
     await db.SaveChangesAsync(cancellationToken);
 
-    return Results.Created($"/api/quotes/{quote.Id}", quote);
+    return Results.Created($"/api/quotes/{result.Value!.Id}", result.Value);
 });
 
 
@@ -63,6 +62,7 @@ app.MapGet("/api/quotes", async (
     int size = 10) =>
 {
     var quotes = await db.Quotes
+        .Where(q => !q.IsDeleted)
         .OrderBy(q => q.Id)
         .Skip((page - 1) * size)
         .Take(size)
@@ -77,41 +77,34 @@ app.MapGet("/api/quotes/{id}", async (
     AppDbContext db,
     CancellationToken cancellationToken) =>
 {
-    var quotes = await db.Quotes
-        .FindAsync(new object[] { id }, cancellationToken);
+    var quote = await db.Quotes
+        .FirstOrDefaultAsync(q => q.Id == id && !q.IsDeleted, cancellationToken);
 
-    if (quotes is null)
-    {
+    if (quote is null)
         return Results.NotFound();
-    }
 
-    return Results.Ok(quotes);
+    return Results.Ok(quote);
 });
 
 
 
-// delete a quote by id
+// soft-delete a quote by id
 app.MapDelete("/api/quotes/{id}", async (
     int id,
     AppDbContext db,
     CancellationToken cancellationToken) =>
 {
     var quote = await db.Quotes
-        .FindAsync(new object[] { id }, cancellationToken);
+        .FirstOrDefaultAsync(q => q.Id == id && !q.IsDeleted, cancellationToken);
 
     if (quote is null)
-    {
         return Results.NotFound();
-    }
 
-    db.Quotes.Remove(quote);
+    quote.Delete();
 
     await db.SaveChangesAsync(cancellationToken);
 
-    return Results.Ok(new
-    {
-        message = "Quote deleted successfully"
-    });
+    return Results.Ok(new { message = "Quote deleted successfully" });
 });
 
 
