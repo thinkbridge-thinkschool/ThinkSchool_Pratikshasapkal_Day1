@@ -6,11 +6,35 @@ using QuotesApi.Models;
 using QuotesApi.Repositories;
 using QuotesApi.Services;
 using QuotesApi.Utilities;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 
 
 var builder = WebApplication.CreateBuilder(args);
 
+var jwtKey = builder.Configuration["Jwt:Key"]!;
+var jwtIssuer = builder.Configuration["Jwt:Issuer"]!;
+var jwtAudience = builder.Configuration["Jwt:Audience"]!;
 
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = jwtIssuer,
+            ValidAudience = jwtAudience,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
+        };
+    });
+
+builder.Services.AddAuthorization();
 
 builder.Services.AddDbContext<AppDbContext>(options =>
 {
@@ -23,8 +47,12 @@ builder.Services.AddScoped<
 
 builder.Services.AddTransient<GuidGenerator>();
 builder.Services.AddSingleton<IClock, SystemClock>();
+builder.Services.AddEndpointsApiExplorer();
 
 var app = builder.Build();
+
+app.UseAuthentication();
+app.UseAuthorization();
 
 // Home route
 app.MapGet("/", () =>
@@ -50,7 +78,7 @@ app.MapPost("/api/quotes", async (
     await db.SaveChangesAsync(cancellationToken);
 
     return Results.Created($"/api/quotes/{result.Value!.Id}", result.Value);
-});
+}).RequireAuthorization();
 
 
 
@@ -69,7 +97,7 @@ app.MapGet("/api/quotes", async (
         .ToListAsync(cancellationToken);
 
     return Results.Ok(quotes);
-});
+}).RequireAuthorization();
 
 
 app.MapGet("/api/quotes/{id}", async (
@@ -84,7 +112,7 @@ app.MapGet("/api/quotes/{id}", async (
         return Results.NotFound();
 
     return Results.Ok(quote);
-});
+}).RequireAuthorization();
 
 
 
@@ -105,7 +133,7 @@ app.MapDelete("/api/quotes/{id}", async (
     await db.SaveChangesAsync(cancellationToken);
 
     return Results.Ok(new { message = "Quote deleted successfully" });
-});
+}).RequireAuthorization();
 
 
 app.MapGet("/api/collections/{id}", async (
@@ -119,7 +147,7 @@ app.MapGet("/api/collections/{id}", async (
         return Results.NotFound();
 
     return Results.Ok(collection);
-});
+}).RequireAuthorization();
 
 app.MapPost("/api/collections", async (
     string name,
@@ -140,7 +168,7 @@ app.MapPost("/api/collections", async (
     return Results.Created(
         $"/api/collections/{collection.Id}",
         collection);
-});
+}).RequireAuthorization();
 
 app.MapPost("/api/collections/{id}/items", async (
     int id,
@@ -173,7 +201,7 @@ app.MapPost("/api/collections/{id}/items", async (
         cancellationToken);
 
     return Results.Ok(collection);
-});
+}).RequireAuthorization();
 
 app.MapDelete("/api/collections/{id}/items/{quoteId}", async (
     int id,
@@ -206,6 +234,80 @@ app.MapDelete("/api/collections/{id}/items/{quoteId}", async (
         cancellationToken);
 
     return Results.Ok(collection);
+}).RequireAuthorization();
+
+app.MapPost("/api/auth/login", async (
+    LoginRequest request,
+    AppDbContext db,
+    IConfiguration configuration) =>
+{
+    var user = await db.Users
+        .FirstOrDefaultAsync(x =>
+            x.Email == request.Email);
+
+    if (user is null ||
+        !user.VerifyPassword(request.Password))
+    {
+        return Results.Unauthorized();
+    }
+
+    var claims = new[]
+    {
+        new Claim(
+            ClaimTypes.NameIdentifier,
+            user.Id.ToString()),
+
+        new Claim(
+            ClaimTypes.Email,
+            user.Email)
+    };
+
+    var key = new SymmetricSecurityKey(
+        Encoding.UTF8.GetBytes(
+            configuration["Jwt:Key"]!));
+
+    var credentials = new SigningCredentials(
+        key,
+        SecurityAlgorithms.HmacSha256);
+
+    var expires = DateTime.UtcNow.AddMinutes(
+        Convert.ToDouble(
+            configuration["Jwt:ExpiryMinutes"]));
+
+    var token = new JwtSecurityToken(
+        issuer: configuration["Jwt:Issuer"],
+        audience: configuration["Jwt:Audience"],
+        claims: claims,
+        expires: expires,
+        signingCredentials: credentials);
+
+    var accessToken =
+        new JwtSecurityTokenHandler()
+            .WriteToken(token);
+
+    return Results.Ok(new
+    {
+        access_token = accessToken,
+        refresh_token = Guid.NewGuid(),
+        expires_in = 3600
+    });
 });
+
+
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider
+        .GetRequiredService<AppDbContext>();
+
+    if (!db.Users.Any())
+    {
+        db.Users.Add(new User(
+            "admin@example.com",
+            "password123"));
+
+        db.SaveChanges();
+    }
+}
+
 
 app.Run();
