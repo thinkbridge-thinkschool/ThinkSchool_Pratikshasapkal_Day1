@@ -1,3 +1,3 @@
 The thing surprised me about both the runtime that how much .NET creates project setup automatically compared to node.js. 
 The .dotnet console app generated a full project structure with a .csproj file and aother necessary folders, but node24 run a TypeScript file directly without extra configuration.
-.NET felt more well-structured and project-oriented, whereas node.js lightweight.
+.NET felt more well-structured and project-oriented, whereas node.js easy and lightweight.

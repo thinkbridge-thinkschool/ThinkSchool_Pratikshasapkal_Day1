@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using QuotesApi.Data;
 using QuotesApi.Dtos;
 using QuotesApi.Models;
+using QuotesApi.Repositories;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -9,6 +10,10 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 {
     options.UseSqlite("Data Source=quotes.db");
 });
+
+builder.Services.AddScoped<
+    ICollectionRepository,
+    CollectionRepository>();
 
 var app = builder.Build();
 
@@ -103,5 +108,102 @@ app.MapDelete("/api/quotes/{id}", async (
 });
 
 
+app.MapGet("/api/collections/{id}", async (
+    int id,
+    ICollectionRepository repository,
+    CancellationToken cancellationToken) =>
+{
+    var collection = await repository.GetById(id, cancellationToken);
+
+    if (collection is null)
+        return Results.NotFound();
+
+    return Results.Ok(collection);
+});
+
+app.MapPost("/api/collections", async (
+    string name,
+    int ownerId,
+    ICollectionRepository repository,
+    CancellationToken cancellationToken) =>
+{
+    var collection = new Collection(
+        name,
+        ownerId);
+
+    await repository.Add(
+        collection,
+        cancellationToken);
+
+    return Results.Created(
+        $"/api/collections/{collection.Id}",
+        collection);
+});
+
+app.MapPost("/api/collections/{id}/items", async (
+    int id,
+    int quoteId,
+    ICollectionRepository repository,
+    CancellationToken cancellationToken) =>
+{
+    var collection = await repository.GetById(
+        id,
+        cancellationToken);
+
+    if (collection == null)
+    {
+        return Results.NotFound();
+    }
+
+    try
+    {
+        collection.AddItem(quoteId);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Problem(
+            detail: ex.Message,
+            statusCode: 400);
+    }
+
+    await repository.Update(
+        collection,
+        cancellationToken);
+
+    return Results.Ok(collection);
+});
+
+app.MapDelete("/api/collections/{id}/items/{quoteId}", async (
+    int id,
+    int quoteId,
+    ICollectionRepository repository,
+    CancellationToken cancellationToken) =>
+{
+    var collection = await repository.GetById(
+        id,
+        cancellationToken);
+
+    if (collection == null)
+    {
+        return Results.NotFound();
+    }
+
+    try
+    {
+        collection.RemoveItem(quoteId);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Problem(
+            detail: ex.Message,
+            statusCode: 400);
+    }
+
+    await repository.Update(
+        collection,
+        cancellationToken);
+
+    return Results.Ok(collection);
+});
 
 app.Run();

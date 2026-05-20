@@ -143,3 +143,4 @@ D:\thinkschool\day-1\QuotesApi\obj\Debug\net10.0\refint\QuotesApi.dll
 D:\thinkschool\day-1\QuotesApi\obj\Debug\net10.0\QuotesApi.pdb
 D:\thinkschool\day-1\QuotesApi\obj\Debug\net10.0\QuotesApi.genruntimeconfig.cache
 D:\thinkschool\day-1\QuotesApi\obj\Debug\net10.0\ref\QuotesApi.dll
+D:\thinkschool\day-1\QuotesApi\obj\Debug\net10.0\QuotesApi.sourcelink.json
