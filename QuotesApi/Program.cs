@@ -21,11 +21,10 @@ builder.Services.AddScoped<
     ICollectionRepository,
     CollectionRepository>();
 
-var app = builder.Build();
-
 builder.Services.AddTransient<GuidGenerator>();
 builder.Services.AddSingleton<IClock, SystemClock>();
 
+var app = builder.Build();
 
 // Home route
 app.MapGet("/", () =>
