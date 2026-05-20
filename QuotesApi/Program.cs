@@ -1,10 +1,16 @@
 using Microsoft.EntityFrameworkCore;
+using QuotesApi.Abstractions;
 using QuotesApi.Data;
 using QuotesApi.Dtos;
 using QuotesApi.Models;
 using QuotesApi.Repositories;
+using QuotesApi.Services;
+using QuotesApi.Utilities;
+
 
 var builder = WebApplication.CreateBuilder(args);
+
+
 
 builder.Services.AddDbContext<AppDbContext>(options =>
 {
@@ -17,9 +23,11 @@ builder.Services.AddScoped<
 
 var app = builder.Build();
 
+builder.Services.AddTransient<GuidGenerator>();
+builder.Services.AddSingleton<IClock, SystemClock>();
 
 
-// HOME ROUTE
+// Home route
 app.MapGet("/", () =>
 {
     return "Quotes API Running";
@@ -27,7 +35,7 @@ app.MapGet("/", () =>
 
 
 
-// CREATE QUOTE
+// Create a new quote
 app.MapPost("/api/quotes", async (
     CreateQuoteRequest request,
     AppDbContext db,
@@ -48,7 +56,7 @@ app.MapPost("/api/quotes", async (
 
 
 
-// GET ALL QUOTES
+// get all quotes with pagination
 app.MapGet("/api/quotes", async (
     AppDbContext db,
     CancellationToken cancellationToken,
@@ -83,7 +91,7 @@ app.MapGet("/api/quotes/{id}", async (
 
 
 
-// DELETE QUOTE
+// delete a quote by id
 app.MapDelete("/api/quotes/{id}", async (
     int id,
     AppDbContext db,
@@ -124,12 +132,14 @@ app.MapGet("/api/collections/{id}", async (
 app.MapPost("/api/collections", async (
     string name,
     int ownerId,
+    IClock clock,
     ICollectionRepository repository,
     CancellationToken cancellationToken) =>
 {
     var collection = new Collection(
         name,
-        ownerId);
+        ownerId,
+        clock);
 
     await repository.Add(
         collection,

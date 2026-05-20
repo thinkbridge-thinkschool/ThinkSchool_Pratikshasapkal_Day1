@@ -24,7 +24,7 @@ public class AppDbContext : DbContext
                 builder.WithOwner()
                     .HasForeignKey("CollectionId");
 
-                builder.Property<Guid>("Id");
+                builder.Property<int>("Id");
 
                 builder.HasKey(
                     "CollectionId",
