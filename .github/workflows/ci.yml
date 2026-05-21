@@ -16,11 +16,11 @@ jobs:
       with:
         dotnet-version: 9.0.x
 
-    - name: Restore
-      run: dotnet restore
+    - name: Restore QuotesApi
+      run: dotnet restore QuotesApi/QuotesApi.csproj
 
-    - name: Build
-      run: dotnet build --no-restore
+    - name: Build QuotesApi
+      run: dotnet build QuotesApi/QuotesApi.csproj --no-restore
 
-    - name: Test
-      run: dotnet test --no-build --verbosity normal
+    - name: Test QuotesApi
+      run: dotnet test QuotesApi.Tests/QuotesApi.Tests.csproj --verbosity normal
