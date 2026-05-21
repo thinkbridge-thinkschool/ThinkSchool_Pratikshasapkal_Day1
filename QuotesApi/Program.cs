@@ -7,7 +7,9 @@ using QuotesApi.Repositories;
 using QuotesApi.Services;
 using QuotesApi.Utilities;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.IdentityModel.Tokens;
+using QuotesApi.Authorization;
 using System.Security.Cryptography;
 using System.Text;
 using System.IdentityModel.Tokens.Jwt;
@@ -100,7 +102,13 @@ builder.Services
                 };
         });
 
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("can-edit-quotes", policy =>
+        policy.RequireClaim("scope", "quotes.write"));
+});
+
+builder.Services.AddScoped<IAuthorizationHandler, DeleteOwnQuoteHandler>();
 
 builder.Services.AddDbContext<AppDbContext>(options =>
 {
@@ -137,7 +145,8 @@ string CreateAccessToken(User user, IConfiguration cfg)
     var claims = new[]
     {
         new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
-        new Claim(ClaimTypes.Email, user.Email)
+        new Claim(ClaimTypes.Email, user.Email),
+        new Claim("scope", "quotes.write")
     };
 
     var key = new SymmetricSecurityKey(
@@ -184,9 +193,11 @@ app.MapGet("/", () =>
 app.MapPost("/api/quotes", async (
     CreateQuoteRequest request,
     AppDbContext db,
+    HttpContext httpContext,
     CancellationToken cancellationToken) =>
 {
-    var result = Quote.Create(request.Author, request.Text);
+    var userEmail = httpContext.User.FindFirstValue(ClaimTypes.Email) ?? string.Empty;
+    var result = Quote.Create(request.Author, request.Text, userEmail);
 
     if (!result.IsSuccess)
         return Results.Problem(detail: result.Error, statusCode: 400);
@@ -196,7 +207,7 @@ app.MapPost("/api/quotes", async (
     await db.SaveChangesAsync(cancellationToken);
 
     return Results.Created($"/api/quotes/{result.Value!.Id}", result.Value);
-}).RequireAuthorization();
+}).RequireAuthorization("can-edit-quotes");
 
 
 
@@ -234,10 +245,12 @@ app.MapGet("/api/quotes/{id}", async (
 
 
 
-// soft-delete a quote by id
+// soft-delete a quote by id — ownership enforced by DeleteOwnQuoteHandler
 app.MapDelete("/api/quotes/{id}", async (
     int id,
     AppDbContext db,
+    IAuthorizationService authService,
+    HttpContext httpContext,
     CancellationToken cancellationToken) =>
 {
     var quote = await db.Quotes
@@ -245,6 +258,12 @@ app.MapDelete("/api/quotes/{id}", async (
 
     if (quote is null)
         return Results.NotFound();
+
+    var authResult = await authService.AuthorizeAsync(
+        httpContext.User, quote, new DeleteOwnQuoteRequirement());
+
+    if (!authResult.Succeeded)
+        return Results.Forbid();
 
     quote.Delete();
 
