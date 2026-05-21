@@ -15,25 +15,90 @@ using System.Security.Claims;
 
 
 var builder = WebApplication.CreateBuilder(args);
+var configuration = builder.Configuration;
 
 var jwtKey = builder.Configuration["Jwt:Key"]!;
 var jwtIssuer = builder.Configuration["Jwt:Issuer"]!;
 var jwtAudience = builder.Configuration["Jwt:Audience"]!;
 
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
+builder.Services
+    .AddAuthentication(options =>
     {
-        options.TokenValidationParameters = new TokenValidationParameters
+        options.DefaultScheme = "DynamicScheme";
+        options.DefaultChallengeScheme = "DynamicScheme";
+    })
+
+    .AddPolicyScheme(
+        "DynamicScheme",
+        "JWT or Entra",
+        options =>
         {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateLifetime = true,
-            ValidateIssuerSigningKey = true,
-            ValidIssuer = jwtIssuer,
-            ValidAudience = jwtAudience,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
-        };
-    });
+            options.ForwardDefaultSelector = context =>
+            {
+                var authHeader =
+                    context.Request.Headers.Authorization
+                        .FirstOrDefault();
+
+                if (authHeader?.StartsWith("Bearer ") == true)
+                {
+                    try
+                    {
+                        var jwt = new JwtSecurityTokenHandler()
+                            .ReadJwtToken(authHeader["Bearer ".Length..]);
+
+                        if (jwt.Issuer.Contains("login.microsoftonline.com"))
+                            return "Entra";
+                    }
+                    catch { }
+                }
+
+                return JwtBearerDefaults.AuthenticationScheme;
+            };
+        })
+
+    .AddJwtBearer(
+        JwtBearerDefaults.AuthenticationScheme,
+        options =>
+        {
+            options.TokenValidationParameters =
+                new TokenValidationParameters
+                {
+                    ValidateIssuer = true,
+                    ValidateAudience = true,
+                    ValidateLifetime = true,
+                    ValidateIssuerSigningKey = true,
+
+                    ValidIssuer =
+                        configuration["Jwt:Issuer"],
+
+                    ValidAudience =
+                        configuration["Jwt:Audience"],
+
+                    IssuerSigningKey =
+                        new SymmetricSecurityKey(
+                            Encoding.UTF8.GetBytes(
+                                configuration["Jwt:Key"]!))
+                };
+        })
+
+    .AddJwtBearer(
+        "Entra",
+        options =>
+        {
+            options.Authority =
+                $"https://login.microsoftonline.com/{configuration["Entra:TenantId"]}/v2.0";
+
+            options.TokenValidationParameters =
+                new TokenValidationParameters
+                {
+                    ValidateIssuer = true,
+                    ValidateAudience = true,
+                    ValidateLifetime = true,
+
+                    ValidAudience =
+                        configuration["Entra:Audience"]
+                };
+        });
 
 builder.Services.AddAuthorization();
 
