@@ -2,7 +2,7 @@ using QuotesApi.Abstractions;
 namespace QuotesApi.Services;
 
 
-public class SystemClock : IClock
+public class UtcSystemClock : IClock
 {
     public DateTimeOffset UtcNow => DateTimeOffset.UtcNow;
 }
