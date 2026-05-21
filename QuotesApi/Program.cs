@@ -8,6 +8,7 @@ using QuotesApi.Services;
 using QuotesApi.Utilities;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
+using System.Security.Cryptography;
 using System.Text;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
@@ -48,6 +49,58 @@ builder.Services.AddScoped<
 builder.Services.AddTransient<GuidGenerator>();
 builder.Services.AddSingleton<IClock, SystemClock>();
 builder.Services.AddEndpointsApiExplorer();
+
+
+string GenerateRefreshToken()
+{
+    var bytes = new byte[32];
+    RandomNumberGenerator.Fill(bytes);
+    return Convert.ToBase64String(bytes)
+        .TrimEnd('=')
+        .Replace('+', '-')
+        .Replace('/', '_');
+}
+
+string HashToken(string token)
+{
+    var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(token));
+    return Convert.ToHexString(bytes).ToLower();
+}
+
+string CreateAccessToken(User user, IConfiguration cfg)
+{
+    var claims = new[]
+    {
+        new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+        new Claim(ClaimTypes.Email, user.Email)
+    };
+
+    var key = new SymmetricSecurityKey(
+        Encoding.UTF8.GetBytes(cfg["Jwt:Key"]!));
+
+    var jwtToken = new JwtSecurityToken(
+        issuer: cfg["Jwt:Issuer"],
+        audience: cfg["Jwt:Audience"],
+        claims: claims,
+        expires: DateTime.UtcNow.AddMinutes(
+            Convert.ToDouble(cfg["Jwt:ExpiryMinutes"])),
+        signingCredentials: new SigningCredentials(
+            key, SecurityAlgorithms.HmacSha256));
+
+    return new JwtSecurityTokenHandler().WriteToken(jwtToken);
+}
+
+async Task RevokeFamily(AppDbContext db, string familyId, CancellationToken ct)
+{
+    var active = await db.RefreshTokens
+        .Where(t => t.FamilyId == familyId && t.RevokedAt == null)
+        .ToListAsync(ct);
+
+    foreach (var t in active)
+        t.RevokedAt = DateTime.UtcNow;
+
+    await db.SaveChangesAsync(ct);
+}
 
 var app = builder.Build();
 
@@ -239,59 +292,88 @@ app.MapDelete("/api/collections/{id}/items/{quoteId}", async (
 app.MapPost("/api/auth/login", async (
     LoginRequest request,
     AppDbContext db,
-    IConfiguration configuration) =>
+    IConfiguration configuration,
+    CancellationToken cancellationToken) =>
 {
     var user = await db.Users
-        .FirstOrDefaultAsync(x =>
-            x.Email == request.Email);
+        .FirstOrDefaultAsync(x => x.Email == request.Email, cancellationToken);
 
-    if (user is null ||
-        !user.VerifyPassword(request.Password))
-    {
+    if (user is null || !user.VerifyPassword(request.Password))
         return Results.Unauthorized();
-    }
 
-    var claims = new[]
+    var rawToken = GenerateRefreshToken();
+    var expiryDays = Convert.ToInt32(configuration["Jwt:RefreshExpiryDays"] ?? "7");
+
+    db.RefreshTokens.Add(new RefreshToken
     {
-        new Claim(
-            ClaimTypes.NameIdentifier,
-            user.Id.ToString()),
+        TokenHash = HashToken(rawToken),
+        UserId = user.Id,
+        FamilyId = Guid.NewGuid().ToString(),
+        ExpiresAt = DateTime.UtcNow.AddDays(expiryDays)
+    });
 
-        new Claim(
-            ClaimTypes.Email,
-            user.Email)
-    };
-
-    var key = new SymmetricSecurityKey(
-        Encoding.UTF8.GetBytes(
-            configuration["Jwt:Key"]!));
-
-    var credentials = new SigningCredentials(
-        key,
-        SecurityAlgorithms.HmacSha256);
-
-    var expires = DateTime.UtcNow.AddMinutes(
-        Convert.ToDouble(
-            configuration["Jwt:ExpiryMinutes"]));
-
-    var token = new JwtSecurityToken(
-        issuer: configuration["Jwt:Issuer"],
-        audience: configuration["Jwt:Audience"],
-        claims: claims,
-        expires: expires,
-        signingCredentials: credentials);
-
-    var accessToken =
-        new JwtSecurityTokenHandler()
-            .WriteToken(token);
+    await db.SaveChangesAsync(cancellationToken);
 
     return Results.Ok(new
     {
-        access_token = accessToken,
-        refresh_token = Guid.NewGuid(),
-        expires_in = 3600
+        access_token = CreateAccessToken(user, configuration),
+        refresh_token = rawToken,
+        expires_in = 900
     });
 });
+
+app.MapPost("/api/auth/refresh", async (
+    RefreshRequest request,
+    AppDbContext db,
+    IConfiguration configuration,
+    CancellationToken cancellationToken) =>
+{
+    var tokenHash = HashToken(request.RefreshToken);
+
+    var stored = await db.RefreshTokens
+        .Include(t => t.User)
+        .FirstOrDefaultAsync(t => t.TokenHash == tokenHash, cancellationToken);
+
+    if (stored is null || stored.IsExpired)
+        return Results.Unauthorized();
+
+    // Reuse detected: legitimate holder already rotated this token.
+    // Revoke the entire family to protect both parties.
+    if (stored.IsUsed)
+    {
+        await RevokeFamily(db, stored.FamilyId, cancellationToken);
+        return Results.Unauthorized();
+    }
+
+    if (stored.IsRevoked)
+        return Results.Unauthorized();
+
+    // Rotate: mark old token as consumed, issue a fresh one in the same family.
+    var newRaw = GenerateRefreshToken();
+    var newHash = HashToken(newRaw);
+    var expiryDays = Convert.ToInt32(configuration["Jwt:RefreshExpiryDays"] ?? "7");
+
+    stored.ReplacedByToken = newHash;
+
+    db.RefreshTokens.Add(new RefreshToken
+    {
+        TokenHash = newHash,
+        UserId = stored.UserId,
+        FamilyId = stored.FamilyId,
+        ExpiresAt = DateTime.UtcNow.AddDays(expiryDays)
+    });
+
+    await db.SaveChangesAsync(cancellationToken);
+
+    return Results.Ok(new
+    {
+        access_token = CreateAccessToken(stored.User, configuration),
+        refresh_token = newRaw,
+        expires_in = 900
+    });
+});
+
+
 
 
 using (var scope = app.Services.CreateScope())
@@ -308,6 +390,7 @@ using (var scope = app.Services.CreateScope())
         db.SaveChanges();
     }
 }
+
 
 
 app.Run();
