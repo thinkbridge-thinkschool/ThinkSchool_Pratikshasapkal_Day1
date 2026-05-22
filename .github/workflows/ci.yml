@@ -1,0 +1,190 @@
+name: Quotes API — CI
+
+# Branch protection — required status checks for main:
+#   Build | Unit Tests | Integration Tests — SQL Server (Testcontainers)
+# Settings → Branches → Add rule → "main" → Require status checks to pass.
+# Coverage below 70% (integration tests) also fails CI via coverlet.runsettings.
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+
+jobs:
+  # Fast build gate — compilation failure cancels both test jobs immediately.
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: day-1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('day-1/**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: |
+          dotnet restore Tests.Domain/Tests.Domain.csproj
+          dotnet restore Quotes.Tests.Integration/Quotes.Tests.Integration.csproj
+
+      - name: Build
+        run: |
+          dotnet build Tests.Domain/Tests.Domain.csproj --no-restore -c Release
+          dotnet build Quotes.Tests.Integration/Quotes.Tests.Integration.csproj --no-restore -c Release
+
+  # Domain-model unit tests — no Docker, no database.
+  unit-tests:
+    name: Unit Tests
+    needs: build
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: day-1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('day-1/**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: dotnet restore Tests.Domain/Tests.Domain.csproj
+
+      - name: Build
+        run: dotnet build Tests.Domain/Tests.Domain.csproj --no-restore -c Release
+
+      - name: Install ReportGenerator
+        run: dotnet tool update -g dotnet-reportgenerator-globaltool
+
+      - name: Test
+        run: |
+          dotnet test Tests.Domain/Tests.Domain.csproj \
+            --no-build -c Release \
+            --logger "trx;LogFileName=unit.trx" \
+            --collect:"XPlat Code Coverage" \
+            --results-directory "${{ github.workspace }}/test-results/unit"
+
+      - name: Generate coverage report
+        if: always()
+        run: |
+          reportgenerator \
+            -reports:"${{ github.workspace }}/test-results/unit/**/coverage.cobertura.xml" \
+            -targetdir:"${{ github.workspace }}/test-results/unit/coverage-report" \
+            -reporttypes:"Html;Badges;TextSummary"
+          cat "${{ github.workspace }}/test-results/unit/coverage-report/Summary.txt"
+
+      - name: Upload test results and coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results-${{ github.run_number }}
+          path: ${{ github.workspace }}/test-results/unit/
+          retention-days: 30
+
+  # Full HTTP stack against a real SQL Server 2022 container (Testcontainers).
+  # coverlet.runsettings enforces 70% line coverage — fails CI if below threshold.
+  integration-tests:
+    name: Integration Tests — SQL Server (Testcontainers)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: day-1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('day-1/**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: dotnet restore Quotes.Tests.Integration/Quotes.Tests.Integration.csproj
+
+      - name: Build
+        run: dotnet build Quotes.Tests.Integration/Quotes.Tests.Integration.csproj --no-restore -c Release
+
+      - name: Pre-pull SQL Server 2022 image
+        run: docker pull mcr.microsoft.com/mssql/server:2022-latest
+
+      - name: Install ReportGenerator
+        run: dotnet tool update -g dotnet-reportgenerator-globaltool
+
+      - name: Test
+        run: |
+          dotnet test Quotes.Tests.Integration/Quotes.Tests.Integration.csproj \
+            --no-build -c Release \
+            --logger "trx;LogFileName=integration.trx" \
+            --collect:"XPlat Code Coverage" \
+            --settings coverlet.runsettings \
+            --results-directory "${{ github.workspace }}/test-results/integration" \
+            --blame-hang-timeout 10m \
+            --blame-crash
+        env:
+          DOCKER_HOST: unix:///var/run/docker.sock
+
+      - name: Generate coverage report
+        if: always()
+        run: |
+          reportgenerator \
+            -reports:"${{ github.workspace }}/test-results/integration/**/coverage.cobertura.xml" \
+            -targetdir:"${{ github.workspace }}/test-results/integration/coverage-report" \
+            -reporttypes:"Html;Badges;TextSummary"
+          cat "${{ github.workspace }}/test-results/integration/coverage-report/Summary.txt"
+
+      - name: Upload test results and coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results-${{ github.run_number }}
+          path: ${{ github.workspace }}/test-results/integration/
+          retention-days: 30
