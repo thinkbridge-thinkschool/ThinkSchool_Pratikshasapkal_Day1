@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -15,14 +15,15 @@ namespace QuotesApi.Migrations
                 name: "RefreshTokens",
                 columns: table => new
                 {
-                    Id = table.Column<int>(type: "INTEGER", nullable: false)
-                        .Annotation("Sqlite:Autoincrement", true),
-                    TokenHash = table.Column<string>(type: "TEXT", nullable: false),
-                    UserId = table.Column<int>(type: "INTEGER", nullable: false),
-                    ExpiresAt = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    RevokedAt = table.Column<DateTime>(type: "TEXT", nullable: true),
-                    ReplacedByToken = table.Column<string>(type: "TEXT", nullable: true),
-                    FamilyId = table.Column<string>(type: "TEXT", nullable: false)
+                    Id = table.Column<int>(nullable: false)
+                        .Annotation("Sqlite:Autoincrement", true)
+                        .Annotation("SqlServer:Identity", "1, 1"),
+                    TokenHash = table.Column<string>(nullable: false),
+                    UserId = table.Column<int>(nullable: false),
+                    ExpiresAt = table.Column<DateTime>(nullable: false),
+                    RevokedAt = table.Column<DateTime>(nullable: true),
+                    ReplacedByToken = table.Column<string>(nullable: true),
+                    FamilyId = table.Column<string>(nullable: false)
                 },
                 constraints: table =>
                 {

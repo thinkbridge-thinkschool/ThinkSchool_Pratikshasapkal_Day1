@@ -9,22 +9,14 @@ public class Collection
 
     public int OwnerId { get; private set; }
 
-    private readonly IClock _clock;
-
     public List<CollectionItem> Items { get; private set; } = new();
 
-    private Collection()
-    {
-        _clock = default!;
-    }
+    private Collection() { }
 
     public Collection(
         string name,
-        int ownerId,
-        IClock clock)
+        int ownerId)
     {
-        _clock = clock;
-
         SetName(name);
 
         OwnerId = ownerId;
@@ -47,7 +39,7 @@ public class Collection
         Name = name;
     }
 
-    public void AddItem(int quoteId)
+    public void AddItem(int quoteId, IClock clock)
     {
         if (Items.Count >= 50)
         {
@@ -61,9 +53,12 @@ public class Collection
                 "Duplicate quote is not allowed");
         }
 
+        var nextId = Items.Count == 0 ? 1 : Items.Max(x => x.Id) + 1;
+
         Items.Add(new CollectionItem(
             quoteId,
-            _clock.UtcNow.UtcDateTime));
+            clock.UtcNow.UtcDateTime,
+            nextId));
     }
 
     public void RemoveItem(int quoteId)
@@ -84,16 +79,17 @@ public class Collection
 public class CollectionItem
 {
     public int Id { get; private set; }
-    public int QuoteId { get; }
+    public int QuoteId { get; private set; }
 
-    public DateTime AddedAt { get; }
+    public DateTime AddedAt { get; private set; }
 
     public CollectionItem(
         int quoteId,
-        DateTime addedAt)
+        DateTime addedAt,
+        int id)
     {
+        Id = id;
         QuoteId = quoteId;
-
         AddedAt = addedAt;
     }
 
