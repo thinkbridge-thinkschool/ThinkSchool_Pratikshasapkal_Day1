@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Serilog.Context;
 
 namespace QuotesApi.Middleware;
@@ -9,9 +10,15 @@ namespace QuotesApi.Middleware;
 //   every middleware, and every service involved in that single request.
 //   Without it you get a wall of interleaved log lines with no way to group them.
 //
-// The client can supply X-Correlation-ID to carry an ID across service boundaries
-// (e.g. a front-end that already has a trace ID from its own observability stack).
-// If none is supplied we generate one.
+// TraceId alignment with OpenTelemetry:
+//   Activity.Current is the active OTel span, created by the ASP.NET Core hosting
+//   layer before any user middleware runs. Reading its TraceId here ensures that
+//   Serilog log lines and OTel distributed traces share the same 32-char hex ID, so
+//   both appear under the same trace when you open Jaeger, Tempo, or Honeycomb.
+//
+//   Priority:  OTel Activity.TraceId  →  X-Correlation-ID header  →  new GUID
+//   The header path handles upstream services that propagate their own correlation
+//   IDs without using W3C traceparent (e.g. legacy clients).
 public sealed class CorrelationIdMiddleware
 {
     private const string Header = "X-Correlation-ID";
@@ -26,19 +33,18 @@ public sealed class CorrelationIdMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
-        var correlationId = context.Request.Headers[Header].FirstOrDefault()
-            ?? Guid.NewGuid().ToString("N");
+        var correlationId =
+            Activity.Current?.TraceId.ToHexString()          // W3C trace from OTel span
+            ?? context.Request.Headers[Header].FirstOrDefault() // upstream correlation header
+            ?? Guid.NewGuid().ToString("N");                    // fallback: generate
 
         context.Response.Headers[Header] = correlationId;
         context.Items[Header] = correlationId;
 
-        // LogContext.PushProperty uses AsyncLocal<T> — the value flows through every
-        // await inside _next without any explicit passing. All loggers called during
-        // this request automatically include TraceId in their structured output.
+        // PushProperty flows through every await via AsyncLocal<T>.
+        // All loggers fired during this request automatically include TraceId.
         using (LogContext.PushProperty("TraceId", correlationId))
         {
-            // First log in the pipeline — establishes the TraceId anchor that all
-            // subsequent logs in this request will share automatically.
             _logger.LogInformation(
                 "Request received Method={Method} Path={Path}",
                 context.Request.Method,
