@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
@@ -13,7 +13,6 @@ namespace QuotesApi.Migrations
             migrationBuilder.AddColumn<bool>(
                 name: "IsDeleted",
                 table: "Quotes",
-                type: "INTEGER",
                 nullable: false,
                 defaultValue: false);
         }

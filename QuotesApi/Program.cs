@@ -1,27 +1,44 @@
+using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using QuotesApi.Abstractions;
+using QuotesApi.Authorization;
 using QuotesApi.Data;
 using QuotesApi.Dtos;
+using QuotesApi.Metrics;
+using QuotesApi.Middleware;
 using QuotesApi.Models;
 using QuotesApi.Repositories;
 using QuotesApi.Services;
 using QuotesApi.Utilities;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.IdentityModel.Tokens;
-using QuotesApi.Authorization;
-using System.Security.Cryptography;
-using System.Text;
+using Serilog;
+using Serilog.Events;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-
+using System.Security.Cryptography;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 var configuration = builder.Configuration;
 
-var jwtKey = builder.Configuration["Jwt:Key"]!;
-var jwtIssuer = builder.Configuration["Jwt:Issuer"]!;
-var jwtAudience = builder.Configuration["Jwt:Audience"]!;
+// Serilog replaces the default Microsoft.Extensions.Logging infrastructure.
+// ILogger<T> and ILoggerFactory still work — they route through Serilog automatically.
+//
+// Structured logging vs interpolated logging:
+//   BAD  (interpolated): logger.LogInformation($"Created quote {id} for {email}");
+//        → the message is a plain string; you cannot query on id or email separately.
+//   GOOD (structured):   logger.LogInformation("Created quote {QuoteId} for {Email}", id, email);
+//        → Serilog captures QuoteId and Email as first-class properties so log
+//          management tools (Seq, Grafana Loki, Application Insights) can filter,
+//          group, and alert on them: WHERE QuoteId = 42, GROUP BY Email, etc.
+//
+// Levels and sinks live in appsettings.json / appsettings.{env}.json so they can
+// be changed without redeployment. appsettings.Development.json enables
+// Microsoft.EntityFrameworkCore.Database.Command at Debug to show generated SQL.
+builder.Host.UseSerilog((ctx, lc) => lc
+    .ReadFrom.Configuration(ctx.Configuration));
 
 builder.Services
     .AddAuthentication(options =>
@@ -37,9 +54,7 @@ builder.Services
         {
             options.ForwardDefaultSelector = context =>
             {
-                var authHeader =
-                    context.Request.Headers.Authorization
-                        .FirstOrDefault();
+                var authHeader = context.Request.Headers.Authorization.FirstOrDefault();
 
                 if (authHeader?.StartsWith("Bearer ") == true)
                 {
@@ -58,49 +73,116 @@ builder.Services
             };
         })
 
-    .AddJwtBearer(
-        JwtBearerDefaults.AuthenticationScheme,
-        options =>
+    .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
         {
-            options.TokenValidationParameters =
-                new TokenValidationParameters
-                {
-                    ValidateIssuer = true,
-                    ValidateAudience = true,
-                    ValidateLifetime = true,
-                    ValidateIssuerSigningKey = true,
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = configuration["Jwt:Issuer"],
+            ValidAudience = configuration["Jwt:Audience"],
+            IssuerSigningKey = new SymmetricSecurityKey(
+                Encoding.UTF8.GetBytes(configuration["Jwt:Key"]!))
+        };
 
-                    ValidIssuer =
-                        configuration["Jwt:Issuer"],
-
-                    ValidAudience =
-                        configuration["Jwt:Audience"],
-
-                    IssuerSigningKey =
-                        new SymmetricSecurityKey(
-                            Encoding.UTF8.GetBytes(
-                                configuration["Jwt:Key"]!))
-                };
-        })
-
-    .AddJwtBearer(
-        "Entra",
-        options =>
+        options.Events = new JwtBearerEvents
         {
-            options.Authority =
-                $"https://login.microsoftonline.com/{configuration["Entra:TenantId"]}/v2.0";
+            OnTokenValidated = ctx =>
+            {
+                var log = ctx.HttpContext.RequestServices
+                    .GetRequiredService<ILoggerFactory>().CreateLogger("QuotesApi.Auth");
 
-            options.TokenValidationParameters =
-                new TokenValidationParameters
+                var userId = ctx.Principal?.FindFirstValue(ClaimTypes.NameIdentifier);
+                log.LogInformation("Token validated UserId={UserId}", userId);
+
+                return Task.CompletedTask;
+            },
+
+            OnAuthenticationFailed = ctx =>
+            {
+                var svc = ctx.HttpContext.RequestServices;
+                var log = svc.GetRequiredService<ILoggerFactory>().CreateLogger("QuotesApi.Auth");
+                var metrics = svc.GetRequiredService<ApiMetrics>();
+
+                if (ctx.Exception is SecurityTokenExpiredException)
                 {
-                    ValidateIssuer = true,
-                    ValidateAudience = true,
-                    ValidateLifetime = true,
+                    log.LogInformation("JWT expired Path={Path}", ctx.HttpContext.Request.Path.Value);
+                    metrics.RecordJwtFailure("bearer", "expired");
+                }
+                else
+                {
+                    log.LogWarning(
+                        "JWT validation failed ExceptionType={ExceptionType} Path={Path}",
+                        ctx.Exception.GetType().Name,
+                        ctx.HttpContext.Request.Path.Value);
+                    metrics.RecordJwtFailure("bearer", "invalid");
+                }
 
-                    ValidAudience =
-                        configuration["Entra:Audience"]
-                };
-        });
+                return Task.CompletedTask;
+            },
+
+            // Fires when JwtBearer is asked to issue a 401 challenge.
+            // AuthenticateFailure is non-null when a token was present but invalid —
+            // OnAuthenticationFailed already logged that case, so we only log here
+            // for the "no token provided at all" path to avoid duplicate lines.
+            OnChallenge = ctx =>
+            {
+                if (ctx.AuthenticateFailure is null)
+                {
+                    var log = ctx.HttpContext.RequestServices
+                        .GetRequiredService<ILoggerFactory>().CreateLogger("QuotesApi.Auth");
+
+                    log.LogWarning(
+                        "No bearer token in request Path={Path}",
+                        ctx.HttpContext.Request.Path.Value);
+                }
+
+                return Task.CompletedTask;
+            }
+        };
+    })
+
+    .AddJwtBearer("Entra", options =>
+    {
+        options.Authority =
+            $"https://login.microsoftonline.com/{configuration["Entra:TenantId"]}/v2.0";
+
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidAudience = configuration["Entra:Audience"]
+        };
+
+        options.Events = new JwtBearerEvents
+        {
+            OnAuthenticationFailed = ctx =>
+            {
+                var svc = ctx.HttpContext.RequestServices;
+                var log = svc.GetRequiredService<ILoggerFactory>().CreateLogger("QuotesApi.Auth");
+                var metrics = svc.GetRequiredService<ApiMetrics>();
+
+                if (ctx.Exception is SecurityTokenExpiredException)
+                {
+                    log.LogInformation("Entra JWT expired Path={Path}", ctx.HttpContext.Request.Path.Value);
+                    metrics.RecordJwtFailure("entra", "expired");
+                }
+                else
+                {
+                    log.LogWarning(
+                        "Entra JWT validation failed ExceptionType={ExceptionType} Path={Path}",
+                        ctx.Exception.GetType().Name,
+                        ctx.HttpContext.Request.Path.Value);
+                    metrics.RecordJwtFailure("entra", "invalid");
+                }
+
+                return Task.CompletedTask;
+            }
+        };
+    });
 
 builder.Services.AddAuthorization(options =>
 {
@@ -109,29 +191,26 @@ builder.Services.AddAuthorization(options =>
 });
 
 builder.Services.AddScoped<IAuthorizationHandler, DeleteOwnQuoteHandler>();
+builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, LoggingAuthorizationResultHandler>();
 
 builder.Services.AddDbContext<AppDbContext>((serviceProvider, options) =>
 {
     options.UseSqlite("Data Source=quotes.db");
 });
 
-builder.Services.AddScoped<
-    ICollectionRepository,
-    CollectionRepository>();
-
+builder.Services.AddScoped<ICollectionRepository, CollectionRepository>();
 builder.Services.AddTransient<GuidGenerator>();
 builder.Services.AddSingleton<IClock, SystemClock>();
 builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddMetrics();
+builder.Services.AddSingleton<ApiMetrics>();
 
 
 string GenerateRefreshToken()
 {
     var bytes = new byte[32];
     RandomNumberGenerator.Fill(bytes);
-    return Convert.ToBase64String(bytes)
-        .TrimEnd('=')
-        .Replace('+', '-')
-        .Replace('/', '_');
+    return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 }
 
 string HashToken(string token)
@@ -149,17 +228,14 @@ string CreateAccessToken(User user, IConfiguration cfg)
         new Claim("scope", "quotes.write")
     };
 
-    var key = new SymmetricSecurityKey(
-        Encoding.UTF8.GetBytes(cfg["Jwt:Key"]!));
+    var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(cfg["Jwt:Key"]!));
 
     var jwtToken = new JwtSecurityToken(
         issuer: cfg["Jwt:Issuer"],
         audience: cfg["Jwt:Audience"],
         claims: claims,
-        expires: DateTime.UtcNow.AddMinutes(
-            Convert.ToDouble(cfg["Jwt:ExpiryMinutes"])),
-        signingCredentials: new SigningCredentials(
-            key, SecurityAlgorithms.HmacSha256));
+        expires: DateTime.UtcNow.AddMinutes(Convert.ToDouble(cfg["Jwt:ExpiryMinutes"])),
+        signingCredentials: new SigningCredentials(key, SecurityAlgorithms.HmacSha256));
 
     return new JwtSecurityTokenHandler().WriteToken(jwtToken);
 }
@@ -178,18 +254,74 @@ async Task RevokeFamily(AppDbContext db, string familyId, CancellationToken ct)
 
 var app = builder.Build();
 
+// Singletons captured for use in endpoint closures — all thread-safe.
+// Loggers: Serilog LogContext.PushProperty in CorrelationIdMiddleware uses AsyncLocal
+//   so every log within a request automatically carries TraceId.
+// Metrics: aggregated across requests, never carry per-request identity.
+var loggerFactory = app.Services.GetRequiredService<ILoggerFactory>();
+var quotesLog = loggerFactory.CreateLogger("QuotesApi.Quotes");
+var authLog = loggerFactory.CreateLogger("QuotesApi.Auth");
+var collectionsLog = loggerFactory.CreateLogger("QuotesApi.Collections");
+var metrics = app.Services.GetRequiredService<ApiMetrics>();
+
+// Pipeline order:
+//   RequestMetrics (outermost) — captures full duration + final status code
+//   ExceptionHandler           — converts unhandled exceptions to 500 before metrics reads status
+//   CorrelationId              — pushes TraceId into Serilog LogContext for all subsequent logs
+//   SerilogRequestLogging      — emits one structured line per request (with TraceId enriched)
+//   Authentication / Authorization
+app.UseMiddleware<RequestMetricsMiddleware>();
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        var feature = context.Features.Get<IExceptionHandlerFeature>();
+        if (feature?.Error is not null)
+        {
+            var exLog = context.RequestServices
+                .GetRequiredService<ILoggerFactory>()
+                .CreateLogger("QuotesApi.Exceptions");
+
+            exLog.LogError(
+                feature.Error,
+                "Unhandled exception Method={Method} Path={Path}",
+                context.Request.Method,
+                context.Request.Path.Value);
+        }
+
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        await context.Response.WriteAsJsonAsync(new { error = "An unexpected error occurred." });
+    });
+});
+
+app.UseMiddleware<CorrelationIdMiddleware>();
+
+// One structured line per request. Level is promoted to Warning for 4xx and Error for 5xx/exceptions.
+// RouteTemplate uses the pattern ("/api/quotes/{id}") not the concrete path — keeps cardinality low.
+app.UseSerilogRequestLogging(opts =>
+{
+    opts.MessageTemplate =
+        "HTTP {RequestMethod} {RequestPath} → {StatusCode} [{RouteTemplate}] in {Elapsed:0.000}ms";
+
+    opts.GetLevel = (ctx, _, ex) =>
+        ex is not null || ctx.Response.StatusCode >= 500 ? LogEventLevel.Error :
+        ctx.Response.StatusCode >= 400 ? LogEventLevel.Warning :
+        LogEventLevel.Information;
+
+    opts.EnrichDiagnosticContext = (diag, ctx) =>
+    {
+        var endpoint = ctx.GetEndpoint() as RouteEndpoint;
+        diag.Set("RouteTemplate", endpoint?.RoutePattern.RawText ?? "unmatched");
+    };
+});
+
 app.UseAuthentication();
 app.UseAuthorization();
 
-// Home route
-app.MapGet("/", () =>
-{
-    return "Quotes API Running";
-});
+
+app.MapGet("/", () => "Quotes API Running");
 
 
-
-// Create a new quote
 app.MapPost("/api/quotes", async (
     CreateQuoteRequest request,
     AppDbContext db,
@@ -200,30 +332,47 @@ app.MapPost("/api/quotes", async (
     var result = Quote.Create(request.Author, request.Text, userEmail);
 
     if (!result.IsSuccess)
+    {
+        quotesLog.LogWarning(
+            "Quote validation failed UserEmail={UserEmail} Error={ValidationError}",
+            userEmail, result.Error);
+
         return Results.Problem(detail: result.Error, statusCode: 400);
+    }
 
     db.Quotes.Add(result.Value!);
-
     await db.SaveChangesAsync(cancellationToken);
+
+    quotesLog.LogInformation(
+        "Quote created QuoteId={QuoteId} Author={Author} CreatedBy={UserEmail}",
+        result.Value!.Id, result.Value.Author, userEmail);
+    metrics.RecordQuoteCreated();
 
     return Results.Created($"/api/quotes/{result.Value!.Id}", result.Value);
 }).RequireAuthorization("can-edit-quotes");
 
 
-
-// get all quotes with pagination
 app.MapGet("/api/quotes", async (
     AppDbContext db,
+    HttpContext httpContext,
     CancellationToken cancellationToken,
     int page = 1,
     int size = 10) =>
 {
+    var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+    quotesLog.LogInformation(
+        "Listing quotes UserId={UserId} Page={Page} Size={Size}", userId, page, size);
+
     var quotes = await db.Quotes
         .Where(q => !q.IsDeleted)
         .OrderBy(q => q.Id)
         .Skip((page - 1) * size)
         .Take(size)
         .ToListAsync(cancellationToken);
+
+    quotesLog.LogInformation(
+        "Returning {QuoteCount} quotes UserId={UserId} Page={Page}", quotes.Count, userId, page);
 
     return Results.Ok(quotes);
 }).RequireAuthorization();
@@ -244,8 +393,7 @@ app.MapGet("/api/quotes/{id}", async (
 }).RequireAuthorization();
 
 
-
-// soft-delete a quote by id — ownership enforced by DeleteOwnQuoteHandler
+// Soft-delete — ownership enforced by DeleteOwnQuoteHandler, which logs denial
 app.MapDelete("/api/quotes/{id}", async (
     int id,
     AppDbContext db,
@@ -263,11 +411,19 @@ app.MapDelete("/api/quotes/{id}", async (
         httpContext.User, quote, new DeleteOwnQuoteRequirement());
 
     if (!authResult.Succeeded)
+    {
+        metrics.RecordAuthorizationFailure("quote");
         return Results.Forbid();
+    }
 
+    var userEmail = httpContext.User.FindFirstValue(ClaimTypes.Email) ?? string.Empty;
     quote.Delete();
-
     await db.SaveChangesAsync(cancellationToken);
+
+    quotesLog.LogInformation(
+        "Quote deleted QuoteId={QuoteId} DeletedBy={UserEmail}",
+        id, userEmail);
+    metrics.RecordQuoteDeleted();
 
     return Results.Ok(new { message = "Quote deleted successfully" });
 }).RequireAuthorization();
@@ -289,53 +445,49 @@ app.MapGet("/api/collections/{id}", async (
 app.MapPost("/api/collections", async (
     string name,
     int ownerId,
-    IClock clock,
     ICollectionRepository repository,
     CancellationToken cancellationToken) =>
 {
-    var collection = new Collection(
-        name,
-        ownerId,
-        clock);
+    var collection = new Collection(name, ownerId);
+    await repository.Add(collection, cancellationToken);
 
-    await repository.Add(
-        collection,
-        cancellationToken);
+    collectionsLog.LogInformation(
+        "Collection created CollectionId={CollectionId} Name={Name} OwnerId={OwnerId}",
+        collection.Id, collection.Name, ownerId);
 
-    return Results.Created(
-        $"/api/collections/{collection.Id}",
-        collection);
+    return Results.Created($"/api/collections/{collection.Id}", collection);
 }).RequireAuthorization();
 
 app.MapPost("/api/collections/{id}/items", async (
     int id,
     int quoteId,
     ICollectionRepository repository,
+    IClock clock,
     CancellationToken cancellationToken) =>
 {
-    var collection = await repository.GetById(
-        id,
-        cancellationToken);
+    var collection = await repository.GetById(id, cancellationToken);
 
     if (collection == null)
-    {
         return Results.NotFound();
-    }
 
     try
     {
-        collection.AddItem(quoteId);
+        collection.AddItem(quoteId, clock);
     }
     catch (InvalidOperationException ex)
     {
-        return Results.Problem(
-            detail: ex.Message,
-            statusCode: 400);
+        collectionsLog.LogWarning(
+            "Add item rejected CollectionId={CollectionId} QuoteId={QuoteId} Reason={Reason}",
+            id, quoteId, ex.Message);
+
+        return Results.Problem(detail: ex.Message, statusCode: 400);
     }
 
-    await repository.Update(
-        collection,
-        cancellationToken);
+    await repository.Update(collection, cancellationToken);
+
+    collectionsLog.LogInformation(
+        "Item added CollectionId={CollectionId} QuoteId={QuoteId}",
+        id, quoteId);
 
     return Results.Ok(collection);
 }).RequireAuthorization();
@@ -346,14 +498,10 @@ app.MapDelete("/api/collections/{id}/items/{quoteId}", async (
     ICollectionRepository repository,
     CancellationToken cancellationToken) =>
 {
-    var collection = await repository.GetById(
-        id,
-        cancellationToken);
+    var collection = await repository.GetById(id, cancellationToken);
 
     if (collection == null)
-    {
         return Results.NotFound();
-    }
 
     try
     {
@@ -361,17 +509,22 @@ app.MapDelete("/api/collections/{id}/items/{quoteId}", async (
     }
     catch (InvalidOperationException ex)
     {
-        return Results.Problem(
-            detail: ex.Message,
-            statusCode: 400);
+        collectionsLog.LogWarning(
+            "Remove item rejected CollectionId={CollectionId} QuoteId={QuoteId} Reason={Reason}",
+            id, quoteId, ex.Message);
+
+        return Results.Problem(detail: ex.Message, statusCode: 400);
     }
 
-    await repository.Update(
-        collection,
-        cancellationToken);
+    await repository.Update(collection, cancellationToken);
+
+    collectionsLog.LogInformation(
+        "Item removed CollectionId={CollectionId} QuoteId={QuoteId}",
+        id, quoteId);
 
     return Results.Ok(collection);
 }).RequireAuthorization();
+
 
 app.MapPost("/api/auth/login", async (
     LoginRequest request,
@@ -383,8 +536,15 @@ app.MapPost("/api/auth/login", async (
         .FirstOrDefaultAsync(x => x.Email == request.Email, cancellationToken);
 
     if (user is null || !user.VerifyPassword(request.Password))
+    {
+        // Deliberately don't distinguish "not found" from "wrong password" —
+        // same log, same response — prevents account enumeration.
+        authLog.LogWarning("Login failed Email={Email}", request.Email);
+        metrics.RecordLogin("failed");
         return Results.Unauthorized();
+    }
 
+    var familyId = Guid.NewGuid().ToString();
     var rawToken = GenerateRefreshToken();
     var expiryDays = Convert.ToInt32(configuration["Jwt:RefreshExpiryDays"] ?? "7");
 
@@ -392,11 +552,16 @@ app.MapPost("/api/auth/login", async (
     {
         TokenHash = HashToken(rawToken),
         UserId = user.Id,
-        FamilyId = Guid.NewGuid().ToString(),
+        FamilyId = familyId,
         ExpiresAt = DateTime.UtcNow.AddDays(expiryDays)
     });
 
     await db.SaveChangesAsync(cancellationToken);
+
+    authLog.LogInformation(
+        "Login succeeded UserId={UserId} FamilyId={FamilyId}",
+        user.Id, familyId);
+    metrics.RecordLogin("success");
 
     return Results.Ok(new
     {
@@ -418,21 +583,41 @@ app.MapPost("/api/auth/refresh", async (
         .Include(t => t.User)
         .FirstOrDefaultAsync(t => t.TokenHash == tokenHash, cancellationToken);
 
-    if (stored is null || stored.IsExpired)
+    if (stored is null)
+    {
+        authLog.LogWarning("Refresh token not found");
+        metrics.RecordTokenRefresh("not_found");
         return Results.Unauthorized();
+    }
 
-    // Reuse detected: legitimate holder already rotated this token.
-    // Revoke the entire family to protect both parties.
+    if (stored.IsExpired)
+    {
+        authLog.LogInformation(
+            "Refresh token expired UserId={UserId} FamilyId={FamilyId}",
+            stored.UserId, stored.FamilyId);
+        metrics.RecordTokenRefresh("expired");
+        return Results.Unauthorized();
+    }
+
     if (stored.IsUsed)
     {
+        authLog.LogWarning(
+            "Refresh token reuse detected — revoking family UserId={UserId} FamilyId={FamilyId}",
+            stored.UserId, stored.FamilyId);
+        metrics.RecordTokenRefresh("reuse_detected");
         await RevokeFamily(db, stored.FamilyId, cancellationToken);
         return Results.Unauthorized();
     }
 
     if (stored.IsRevoked)
+    {
+        authLog.LogWarning(
+            "Refresh token already revoked UserId={UserId} FamilyId={FamilyId}",
+            stored.UserId, stored.FamilyId);
+        metrics.RecordTokenRefresh("revoked");
         return Results.Unauthorized();
+    }
 
-    // Rotate: mark old token as consumed, issue a fresh one in the same family.
     var newRaw = GenerateRefreshToken();
     var newHash = HashToken(newRaw);
     var expiryDays = Convert.ToInt32(configuration["Jwt:RefreshExpiryDays"] ?? "7");
@@ -449,6 +634,11 @@ app.MapPost("/api/auth/refresh", async (
 
     await db.SaveChangesAsync(cancellationToken);
 
+    authLog.LogInformation(
+        "Token rotated UserId={UserId} FamilyId={FamilyId}",
+        stored.UserId, stored.FamilyId);
+    metrics.RecordTokenRefresh("rotated");
+
     return Results.Ok(new
     {
         access_token = CreateAccessToken(stored.User, configuration),
@@ -458,25 +648,17 @@ app.MapPost("/api/auth/refresh", async (
 });
 
 
-
-
 if (!app.Environment.IsEnvironment("Testing"))
 {
     using var scope = app.Services.CreateScope();
 
-    var db = scope.ServiceProvider
-        .GetRequiredService<AppDbContext>();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
     if (!db.Users.Any())
     {
-        db.Users.Add(new User(
-            "admin@example.com",
-            "password123"));
-
+        db.Users.Add(new User("admin@example.com", "password123"));
         db.SaveChanges();
     }
 }
-
-
 
 app.Run();

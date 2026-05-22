@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
@@ -14,10 +14,11 @@ namespace QuotesApi.Migrations
                 name: "Quotes",
                 columns: table => new
                 {
-                    Id = table.Column<int>(type: "INTEGER", nullable: false)
-                        .Annotation("Sqlite:Autoincrement", true),
-                    Author = table.Column<string>(type: "TEXT", nullable: false),
-                    Text = table.Column<string>(type: "TEXT", nullable: false)
+                    Id = table.Column<int>(nullable: false)
+                        .Annotation("Sqlite:Autoincrement", true)
+                        .Annotation("SqlServer:Identity", "1, 1"),
+                    Author = table.Column<string>(nullable: false),
+                    Text = table.Column<string>(nullable: false)
                 },
                 constraints: table =>
                 {
@@ -28,10 +29,11 @@ namespace QuotesApi.Migrations
                 name: "Collections",
                 columns: table => new
                 {
-                    Id = table.Column<int>(type: "INTEGER", nullable: false)
-                        .Annotation("Sqlite:Autoincrement", true),
-                    Name = table.Column<string>(type: "TEXT", nullable: false),
-                    OwnerId = table.Column<int>(type: "INTEGER", nullable: false)
+                    Id = table.Column<int>(nullable: false)
+                        .Annotation("Sqlite:Autoincrement", true)
+                        .Annotation("SqlServer:Identity", "1, 1"),
+                    Name = table.Column<string>(nullable: false),
+                    OwnerId = table.Column<int>(nullable: false)
                 },
                 constraints: table =>
                 {
@@ -42,9 +44,9 @@ namespace QuotesApi.Migrations
                 name: "CollectionItem",
                 columns: table => new
                 {
-                    CollectionId = table.Column<int>(type: "INTEGER", nullable: false),
-                    Id = table.Column<int>(type: "INTEGER", nullable: false),
-                    QuoteId = table.Column<int>(type: "INTEGER", nullable: false)
+                    CollectionId = table.Column<int>(nullable: false),
+                    Id = table.Column<int>(nullable: false),
+                    QuoteId = table.Column<int>(nullable: false)
                 },
                 constraints: table =>
                 {

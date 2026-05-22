@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
@@ -13,7 +13,6 @@ namespace QuotesApi.Migrations
             migrationBuilder.AddColumn<string>(
                 name: "CreatedByEmail",
                 table: "Quotes",
-                type: "TEXT",
                 nullable: false,
                 defaultValue: "");
         }
