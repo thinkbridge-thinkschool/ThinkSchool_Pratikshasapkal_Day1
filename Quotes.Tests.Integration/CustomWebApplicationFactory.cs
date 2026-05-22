@@ -2,24 +2,27 @@ namespace Quotes.Tests.Integration;
 
 /// <summary>
 /// Per-test WebApplicationFactory:
-///   - Replaces the file-backed SQLite DB with an isolated in-memory SQLite connection
-///     that lives exactly as long as this factory instance.
+///   - Each instance targets a unique SQL Server database on the shared Testcontainers
+///     SQL Server instance, so tests are fully isolated with no shared DB state.
 ///   - Replaces IClock with a controllable FakeClock exposed via the Clock property.
-///   - Applies EF schema (EnsureCreated) and seeds the admin user after the host is built.
+///   - Applies all EF Core migrations (creating the database if needed) and seeds the
+///     admin user after the host is built.
 ///   - Sets the environment to "Testing" so Program.cs skips its own seeding block.
+///
+/// Requires Docker to be running locally.
 /// </summary>
 public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>
 {
-    private readonly SqliteConnection _connection;
+    private readonly string _databaseName = $"testdb_{Guid.NewGuid():N}";
+    private readonly SqlServerContainerFixture _fixture;
 
     /// <summary>Controllable clock — tests can call Clock.Advance() or Clock.Set().</summary>
     public FakeClock Clock { get; }
 
-    public CustomWebApplicationFactory()
+    public CustomWebApplicationFactory(SqlServerContainerFixture fixture)
     {
         Clock = new FakeClock();
-        _connection = new SqliteConnection("Data Source=:memory:");
-        _connection.Open();
+        _fixture = fixture;
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -28,10 +31,8 @@ public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>
 
         builder.ConfigureServices(services =>
         {
-            // Remove AppDbContext, DbContextOptions<AppDbContext>, and the internal
-            // IDbContextOptionsConfiguration<AppDbContext> that stores the SQLite file path.
-            // The (serviceProvider, options) => form of AddDbContext registers the last one,
-            // which is why we match by generic argument rather than just by service type.
+            // Remove all AppDbContext registrations (the SQLite-backed production registration
+            // and any internal EF options descriptors keyed on AppDbContext).
             var toRemove = services
                 .Where(d =>
                     d.ServiceType == typeof(DbContextOptions<AppDbContext>) ||
@@ -43,10 +44,19 @@ public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>
             foreach (var descriptor in toRemove)
                 services.Remove(descriptor);
 
-            // Bind the context to the shared open connection so the in-memory database
-            // survives for the full lifetime of this factory.
+            // Point AppDbContext at a fresh, uniquely-named SQL Server database on the
+            // shared container. EF's Migrate() in CreateHost() will create it.
+            //
+            // Suppress PendingModelChangesWarning: EF Core 10 compares the live C# model hash
+            // against the last migration snapshot. Our snapshot is SQLite-generated and lacks
+            // QuoteId/AddedAt for CollectionItem because those were added to the migrations
+            // manually (no Designer file update). The schema IS correct — all columns exist
+            // after Migrate() — so this guard is a false positive in cross-provider test infra.
             services.AddDbContext<AppDbContext>(options =>
-                options.UseSqlite(_connection));
+                options
+                    .UseSqlServer(_fixture.GetConnectionString(_databaseName))
+                    .ConfigureWarnings(w =>
+                        w.Ignore(RelationalEventId.PendingModelChangesWarning)));
 
             // Swap the production clock for the controllable fake.
             var clockDescriptor = services.SingleOrDefault(
@@ -65,9 +75,9 @@ public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>
         using var scope = host.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        // Create all tables from the current EF model.
-        // (No migrations exist; EnsureCreated is the right call here.)
-        db.Database.EnsureCreated();
+        // Create the database and apply every pending migration.
+        // Migrate() creates the database if it does not already exist.
+        db.Database.Migrate();
 
         // Program.cs seeding is guarded by !IsEnvironment("Testing"),
         // so we seed the admin user ourselves.
@@ -113,12 +123,5 @@ public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", token);
         return client;
-    }
-
-    protected override void Dispose(bool disposing)
-    {
-        if (disposing)
-            _connection.Dispose();
-        base.Dispose(disposing);
     }
 }

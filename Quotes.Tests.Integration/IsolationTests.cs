@@ -4,16 +4,19 @@ namespace Quotes.Tests.Integration;
 /// Proves that each test runs against a completely isolated, freshly-created database.
 ///
 /// xUnit creates a new class instance per [Fact], so every test here gets its own
-/// CustomWebApplicationFactory → its own SqliteConnection("Data Source=:memory:")
-/// → its own schema → zero shared state.
+/// CustomWebApplicationFactory → its own uniquely-named SQL Server database
+/// → its own migrated schema → zero shared state.
 /// </summary>
+[Collection("SqlServer")]
 public sealed class IsolationTests : IDisposable
 {
     private readonly CustomWebApplicationFactory _factory;
+    private readonly SqlServerContainerFixture _fixture;
 
-    public IsolationTests()
+    public IsolationTests(SqlServerContainerFixture fixture)
     {
-        _factory = new CustomWebApplicationFactory();
+        _fixture = fixture;
+        _factory = new CustomWebApplicationFactory(fixture);
     }
 
     // ── 1. Fresh DB per test ─────────────────────────────────────────────────
@@ -31,7 +34,7 @@ public sealed class IsolationTests : IDisposable
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var root = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
         root.GetArrayLength().Should().Be(0,
-            because: "each test gets a pristine in-memory DB — no quotes exist at startup");
+            because: "each test gets its own SQL Server database — no quotes exist at startup");
     }
 
     [Fact]
@@ -72,8 +75,8 @@ public sealed class IsolationTests : IDisposable
         var createResp = await clientA.PostAsync("/api/quotes", body);
         createResp.StatusCode.Should().Be(HttpStatusCode.Created);
 
-        // Arrange — factory B is a completely independent instance
-        using var factoryB = new CustomWebApplicationFactory();
+        // Arrange — factory B targets a completely independent SQL Server database
+        using var factoryB = new CustomWebApplicationFactory(_fixture);
         var clientB = await factoryB.CreateAuthenticatedClientAsync();
 
         // Act
@@ -82,7 +85,7 @@ public sealed class IsolationTests : IDisposable
         // Assert — factory B's DB has zero quotes; Seneca's quote is invisible
         var root = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
         root.GetArrayLength().Should().Be(0,
-            because: "each factory owns a separate in-memory SQLite connection; data cannot cross that boundary");
+            because: "each factory owns a separate SQL Server database; data cannot cross that boundary");
     }
 
     // ── 3. Schema is applied automatically ───────────────────────────────────
@@ -95,16 +98,16 @@ public sealed class IsolationTests : IDisposable
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
         // Act & Assert — each Count() call hits the DB; a missing table would throw
-        var queryQuotes    = () => db.Quotes.Count();
-        var queryUsers     = () => db.Users.Count();
-        var queryTokens    = () => db.RefreshTokens.Count();
+        var queryQuotes = () => db.Quotes.Count();
+        var queryUsers  = () => db.Users.Count();
+        var queryTokens = () => db.RefreshTokens.Count();
 
         queryQuotes.Should().NotThrow(
-            because: "EnsureCreated() in CreateHost() must have created the Quotes table");
+            because: "Migrate() in CreateHost() must have created the Quotes table");
         queryUsers.Should().NotThrow(
-            because: "EnsureCreated() in CreateHost() must have created the Users table");
+            because: "Migrate() in CreateHost() must have created the Users table");
         queryTokens.Should().NotThrow(
-            because: "EnsureCreated() in CreateHost() must have created the RefreshTokens table");
+            because: "Migrate() in CreateHost() must have created the RefreshTokens table");
 
         // Seeded admin user is present
         db.Users.Count().Should().Be(1,
