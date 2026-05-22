@@ -18,9 +18,16 @@ public class CancellationTests : IClassFixture<WebApplicationFactory<Program>>
             {
                 // Replace SQLite with an isolated in-memory database so tests
                 // don't touch the file system and don't share state.
-                var descriptor = services.SingleOrDefault(
-                    d => d.ServiceType == typeof(DbContextOptions<AppDbContext>));
-                if (descriptor is not null) services.Remove(descriptor);
+                var descriptors = services
+                    .Where(d =>
+                        d.ServiceType == typeof(DbContextOptions<AppDbContext>) ||
+                        d.ServiceType == typeof(AppDbContext) ||
+                        (d.ServiceType.IsGenericType &&
+                         d.ServiceType.GetGenericArguments().Contains(typeof(AppDbContext))))
+                    .ToList();
+
+                foreach (var descriptor in descriptors)
+                    services.Remove(descriptor);
 
                 services.AddDbContext<AppDbContext>(options =>
                     options.UseInMemoryDatabase("CancellationTests_" + Guid.NewGuid()));
