@@ -69,6 +69,7 @@ builder.Services
                     ValidateAudience = true,
                     ValidateLifetime = true,
                     ValidateIssuerSigningKey = true,
+                    ClockSkew = TimeSpan.Zero,
 
                     ValidIssuer =
                         configuration["Jwt:Issuer"],
@@ -106,6 +107,9 @@ builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("can-edit-quotes", policy =>
         policy.RequireClaim("scope", "quotes.write"));
+
+    options.AddPolicy("can-delete-own-quotes", policy =>
+        policy.AddRequirements(new DeleteOwnQuoteRequirement()));
 });
 
 builder.Services.AddScoped<IAuthorizationHandler, DeleteOwnQuoteHandler>();
@@ -260,7 +264,7 @@ app.MapDelete("/api/quotes/{id}", async (
         return Results.NotFound();
 
     var authResult = await authService.AuthorizeAsync(
-        httpContext.User, quote, new DeleteOwnQuoteRequirement());
+        httpContext.User, quote, "can-delete-own-quotes");
 
     if (!authResult.Succeeded)
         return Results.Forbid();
@@ -480,3 +484,5 @@ if (!app.Environment.IsEnvironment("Testing"))
 
 
 app.Run();
+
+public partial class Program { }
