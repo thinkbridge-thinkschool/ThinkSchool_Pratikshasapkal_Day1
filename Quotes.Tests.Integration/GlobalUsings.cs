@@ -1,12 +1,13 @@
 global using System.Net;
 global using System.Net.Http.Headers;
+global using System.Security.Cryptography;
 global using System.Text;
 global using System.Text.Json;
 global using FluentAssertions;
 global using Microsoft.AspNetCore.Hosting;
 global using Microsoft.AspNetCore.Mvc.Testing;
-global using Microsoft.Data.Sqlite;
 global using Microsoft.EntityFrameworkCore;
+global using Microsoft.EntityFrameworkCore.Diagnostics;
 global using Microsoft.Extensions.DependencyInjection;
 global using Microsoft.Extensions.Hosting;
 global using QuotesApi.Abstractions;
