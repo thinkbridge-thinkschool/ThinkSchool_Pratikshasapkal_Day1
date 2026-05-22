@@ -110,7 +110,7 @@ builder.Services.AddAuthorization(options =>
 
 builder.Services.AddScoped<IAuthorizationHandler, DeleteOwnQuoteHandler>();
 
-builder.Services.AddDbContext<AppDbContext>(options =>
+builder.Services.AddDbContext<AppDbContext>((serviceProvider, options) =>
 {
     options.UseSqlite("Data Source=quotes.db");
 });
@@ -460,8 +460,10 @@ app.MapPost("/api/auth/refresh", async (
 
 
 
-using (var scope = app.Services.CreateScope())
+if (!app.Environment.IsEnvironment("Testing"))
 {
+    using var scope = app.Services.CreateScope();
+
     var db = scope.ServiceProvider
         .GetRequiredService<AppDbContext>();
 
