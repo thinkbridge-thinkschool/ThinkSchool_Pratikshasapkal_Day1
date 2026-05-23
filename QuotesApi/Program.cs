@@ -26,7 +26,6 @@ using Serilog.Events;
 using System.Diagnostics;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using System.Security.Cryptography;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -259,6 +258,8 @@ builder.Services.AddSingleton<IClock, SystemClock>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddMetrics();
 builder.Services.AddSingleton<ApiMetrics>();
+// Singleton: uses IOptions<JwtOptions> (frozen at startup), so singleton lifetime is correct.
+builder.Services.AddSingleton<ITokenService, TokenService>();
 
 // OpenTelemetry + Azure Monitor / Application Insights.
 //
@@ -329,42 +330,6 @@ otelBuilder
         .AddHttpClientInstrumentation()
         .AddOtlpExporter());   // local Jaeger/Tempo; no-op if OTEL_EXPORTER_OTLP_ENDPOINT unset
 
-
-string GenerateRefreshToken()
-{
-    var bytes = new byte[32];
-    RandomNumberGenerator.Fill(bytes);
-    return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-}
-
-string HashToken(string token)
-{
-    var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(token));
-    return Convert.ToHexString(bytes).ToLower();
-}
-
-// Accepts a typed JwtOptions instead of IConfiguration so callers are not coupled
-// to the raw configuration API and the compiler enforces that the key is present.
-string CreateAccessToken(User user, JwtOptions opts)
-{
-    var claims = new[]
-    {
-        new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
-        new Claim(ClaimTypes.Email, user.Email),
-        new Claim("scope", "quotes.write")
-    };
-
-    var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(opts.Key));
-
-    var jwtToken = new JwtSecurityToken(
-        issuer:             opts.Issuer,
-        audience:           opts.Audience,
-        claims:             claims,
-        expires:            DateTime.UtcNow.Add(opts.AccessTokenLifetime),
-        signingCredentials: new SigningCredentials(key, SecurityAlgorithms.HmacSha256));
-
-    return new JwtSecurityTokenHandler().WriteToken(jwtToken);
-}
 
 async Task RevokeFamily(AppDbContext db, string familyId, CancellationToken ct)
 {
@@ -685,7 +650,7 @@ app.MapDelete("/api/collections/{id}/items/{quoteId}", async (
 app.MapPost("/api/auth/login", async (
     LoginRequest request,
     AppDbContext db,
-    IOptionsSnapshot<JwtOptions> jwtOptions,
+    ITokenService tokens,
     CancellationToken cancellationToken) =>
 {
     using var activity = AppActivitySource.Instance.StartActivity("auth.login");
@@ -703,16 +668,15 @@ app.MapPost("/api/auth/login", async (
         return Results.Unauthorized();
     }
 
-    var opts       = jwtOptions.Value;
-    var familyId   = Guid.NewGuid().ToString();
-    var rawToken   = GenerateRefreshToken();
+    var familyId = Guid.NewGuid().ToString();
+    var rawToken = tokens.GenerateRefreshToken();
 
     db.RefreshTokens.Add(new RefreshToken
     {
-        TokenHash = HashToken(rawToken),
+        TokenHash = tokens.HashToken(rawToken),
         UserId    = user.Id,
         FamilyId  = familyId,
-        ExpiresAt = DateTime.UtcNow.Add(opts.RefreshTokenLifetime)
+        ExpiresAt = DateTime.UtcNow.Add(tokens.RefreshTokenLifetime)
     });
 
     await db.SaveChangesAsync(cancellationToken);
@@ -726,21 +690,21 @@ app.MapPost("/api/auth/login", async (
 
     return Results.Ok(new
     {
-        access_token  = CreateAccessToken(user, opts),
+        access_token  = tokens.CreateAccessToken(user),
         refresh_token = rawToken,
-        expires_in    = (int)opts.AccessTokenLifetime.TotalSeconds
+        expires_in    = (int)tokens.AccessTokenLifetime.TotalSeconds
     });
 });
 
 app.MapPost("/api/auth/refresh", async (
     RefreshRequest request,
     AppDbContext db,
-    IOptionsSnapshot<JwtOptions> jwtOptions,
+    ITokenService tokens,
     CancellationToken cancellationToken) =>
 {
     using var activity = AppActivitySource.Instance.StartActivity("token.rotate");
 
-    var tokenHash = HashToken(request.RefreshToken);
+    var tokenHash = tokens.HashToken(request.RefreshToken);
 
     var stored = await db.RefreshTokens
         .Include(t => t.User)
@@ -788,9 +752,8 @@ app.MapPost("/api/auth/refresh", async (
         return Results.Unauthorized();
     }
 
-    var opts     = jwtOptions.Value;
-    var newRaw   = GenerateRefreshToken();
-    var newHash  = HashToken(newRaw);
+    var newRaw  = tokens.GenerateRefreshToken();
+    var newHash = tokens.HashToken(newRaw);
 
     stored.ReplacedByToken = newHash;
 
@@ -799,7 +762,7 @@ app.MapPost("/api/auth/refresh", async (
         TokenHash = newHash,
         UserId    = stored.UserId,
         FamilyId  = stored.FamilyId,
-        ExpiresAt = DateTime.UtcNow.Add(opts.RefreshTokenLifetime)
+        ExpiresAt = DateTime.UtcNow.Add(tokens.RefreshTokenLifetime)
     });
 
     await db.SaveChangesAsync(cancellationToken);
@@ -812,9 +775,9 @@ app.MapPost("/api/auth/refresh", async (
 
     return Results.Ok(new
     {
-        access_token  = CreateAccessToken(stored.User, opts),
+        access_token  = tokens.CreateAccessToken(stored.User),
         refresh_token = newRaw,
-        expires_in    = (int)opts.AccessTokenLifetime.TotalSeconds
+        expires_in    = (int)tokens.AccessTokenLifetime.TotalSeconds
     });
 });
 
