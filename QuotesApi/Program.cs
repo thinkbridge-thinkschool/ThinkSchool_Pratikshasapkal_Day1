@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using QuotesApi.Abstractions;
 using QuotesApi.Authorization;
@@ -10,6 +11,7 @@ using QuotesApi.Dtos;
 using QuotesApi.Metrics;
 using QuotesApi.Middleware;
 using QuotesApi.Models;
+using QuotesApi.Options;
 using QuotesApi.Repositories;
 using QuotesApi.Services;
 using QuotesApi.Telemetry;
@@ -28,7 +30,6 @@ using System.Security.Cryptography;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
-var configuration = builder.Configuration;
 
 // Serilog replaces the default Microsoft.Extensions.Logging infrastructure.
 // ILogger<T> and ILoggerFactory still work — they route through Serilog automatically.
@@ -46,6 +47,47 @@ var configuration = builder.Configuration;
 // Microsoft.EntityFrameworkCore.Database.Command at Debug to show generated SQL.
 builder.Host.UseSerilog((ctx, lc) => lc
     .ReadFrom.Configuration(ctx.Configuration));
+
+// ── Options: early bindings ───────────────────────────────────────────────────
+// Read typed options from configuration before the DI container is built.
+// These local variables are used only during service registration below.
+// At runtime, endpoints and services receive options via IOptionsSnapshot / IOptionsMonitor.
+//
+// Configuration precedence (highest → lowest):
+//   1. Environment variables          (Jwt__Key, KeyVault__Uri, …)
+//   2. appsettings.{Environment}.json (appsettings.Testing.json overrides the test JWT key)
+//   3. appsettings.json               (non-secret defaults)
+//   4. user-secrets                   (Development only — run: dotnet user-secrets set "Jwt:Key" "…")
+//
+// See CONFIGURATION.md for full setup instructions.
+var jwtCfg   = builder.Configuration.GetSection(JwtOptions.Section).Get<JwtOptions>()           ?? new JwtOptions();
+var entraCfg = builder.Configuration.GetSection(EntraOptions.Section).Get<EntraOptions>()       ?? new EntraOptions();
+var otelCfg  = builder.Configuration.GetSection(OpenTelemetryOptions.Section).Get<OpenTelemetryOptions>() ?? new OpenTelemetryOptions();
+var kvCfg    = builder.Configuration.GetSection(KeyVaultOptions.Section).Get<KeyVaultOptions>() ?? new KeyVaultOptions();
+
+// ── Options: DI registration + validation ────────────────────────────────────
+// JwtOptions: required at startup — ValidateOnStart() fails fast before the first
+// request if Jwt:Key is missing or too short.  All other sections are optional.
+builder.Services
+    .AddOptions<JwtOptions>()
+    .BindConfiguration(JwtOptions.Section)
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+// IOptionsSnapshot<T>  → scoped  (new snapshot per HTTP request; used in endpoints)
+// IOptionsMonitor<T>   → singleton (change-notification capable; used in singletons)
+// Both are registered automatically by Configure<T> / AddOptions<T>.BindConfiguration.
+builder.Services.Configure<EntraOptions>(
+    builder.Configuration.GetSection(EntraOptions.Section));
+
+builder.Services.Configure<KeyVaultOptions>(
+    builder.Configuration.GetSection(KeyVaultOptions.Section));
+
+// IOptionsMonitor<OpenTelemetryOptions> is available to any singleton that needs
+// the service name at runtime (e.g. health-check responses, metrics labels).
+builder.Services
+    .AddOptions<OpenTelemetryOptions>()
+    .BindConfiguration(OpenTelemetryOptions.Section);
 
 builder.Services
     .AddAuthentication(options =>
@@ -82,16 +124,20 @@ builder.Services
 
     .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, options =>
     {
+        // jwtCfg is the early-bound snapshot used only at service-registration time.
+        // At request time the signing key is already baked into the JwtBearerOptions
+        // registered here; key rotation requires an app restart (acceptable trade-off
+        // for a symmetric key scheme).
         options.TokenValidationParameters = new TokenValidationParameters
         {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateLifetime = true,
+            ValidateIssuer           = true,
+            ValidateAudience         = true,
+            ValidateLifetime         = true,
             ValidateIssuerSigningKey = true,
-            ValidIssuer = configuration["Jwt:Issuer"],
-            ValidAudience = configuration["Jwt:Audience"],
-            IssuerSigningKey = new SymmetricSecurityKey(
-                Encoding.UTF8.GetBytes(configuration["Jwt:Key"]!))
+            ValidIssuer              = jwtCfg.Issuer,
+            ValidAudience            = jwtCfg.Audience,
+            IssuerSigningKey         = new SymmetricSecurityKey(
+                Encoding.UTF8.GetBytes(jwtCfg.Key))
         };
 
         options.Events = new JwtBearerEvents
@@ -109,8 +155,8 @@ builder.Services
 
             OnAuthenticationFailed = ctx =>
             {
-                var svc = ctx.HttpContext.RequestServices;
-                var log = svc.GetRequiredService<ILoggerFactory>().CreateLogger("QuotesApi.Auth");
+                var svc     = ctx.HttpContext.RequestServices;
+                var log     = svc.GetRequiredService<ILoggerFactory>().CreateLogger("QuotesApi.Auth");
                 var metrics = svc.GetRequiredService<ApiMetrics>();
 
                 if (ctx.Exception is SecurityTokenExpiredException)
@@ -153,23 +199,25 @@ builder.Services
 
     .AddJwtBearer("Entra", options =>
     {
-        options.Authority =
-            $"https://login.microsoftonline.com/{configuration["Entra:TenantId"]}/v2.0";
+        // entraCfg.Authority and entraCfg.Audience are derived from the early binding.
+        // Entra is optional: if EntraOptions.IsConfigured is false the "Entra" scheme
+        // simply never matches any token (the DynamicScheme selector routes away from it).
+        options.Authority = entraCfg.Authority;
 
         options.TokenValidationParameters = new TokenValidationParameters
         {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateLifetime = true,
-            ValidAudience = configuration["Entra:Audience"]
+            ValidateIssuer    = true,
+            ValidateAudience  = true,
+            ValidateLifetime  = true,
+            ValidAudience     = entraCfg.Audience
         };
 
         options.Events = new JwtBearerEvents
         {
             OnAuthenticationFailed = ctx =>
             {
-                var svc = ctx.HttpContext.RequestServices;
-                var log = svc.GetRequiredService<ILoggerFactory>().CreateLogger("QuotesApi.Auth");
+                var svc     = ctx.HttpContext.RequestServices;
+                var log     = svc.GetRequiredService<ILoggerFactory>().CreateLogger("QuotesApi.Auth");
                 var metrics = svc.GetRequiredService<ApiMetrics>();
 
                 if (ctx.Exception is SecurityTokenExpiredException)
@@ -232,7 +280,7 @@ builder.Services.AddSingleton<ApiMetrics>();
 // Azure Monitor connection string — never hardcoded, loaded in priority order:
 //   1. Azure Key Vault  (KeyVault:Uri set in config → secret "appinsights-connection-string")
 //   2. Environment variable  APPLICATIONINSIGHTS_CONNECTION_STRING  (staging / CI)
-//   3. Absent → UseAzureMonitor() is registered but silently inactive (no-op exporter)
+//   3. Absent → UseAzureMonitor() is skipped; OTLP (Jaeger/Tempo) still works
 //
 // DefaultAzureCredential resolution order:
 //   In Azure (App Service / AKS): ManagedIdentityCredential  — zero config needed
@@ -243,14 +291,15 @@ builder.Services.AddSingleton<ApiMetrics>();
 //   Leave unset in production — OTLP exporter fails silently if no collector is reachable.
 
 // ── Load App Insights connection string from Key Vault ────────────────────
+// kvCfg is the early-bound KeyVaultOptions; at runtime IOptionsMonitor<KeyVaultOptions>
+// is available in any singleton service that needs to re-check the URI.
 var appInsightsCs = builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
-var kvUri = builder.Configuration["KeyVault:Uri"];
 
-if (string.IsNullOrEmpty(appInsightsCs) && !string.IsNullOrEmpty(kvUri))
+if (string.IsNullOrEmpty(appInsightsCs) && kvCfg.IsConfigured)
 {
     try
     {
-        var kvClient = new SecretClient(new Uri(kvUri), new DefaultAzureCredential());
+        var kvClient = new SecretClient(new Uri(kvCfg.Uri), new DefaultAzureCredential());
         appInsightsCs = kvClient.GetSecret("appinsights-connection-string").Value.Value;
     }
     catch (Exception ex)
@@ -271,7 +320,7 @@ if (!string.IsNullOrEmpty(appInsightsCs))
 
 otelBuilder
     .ConfigureResource(r => r.AddService(
-        serviceName: builder.Configuration["OpenTelemetry:ServiceName"] ?? "QuotesApi",
+        serviceName:    otelCfg.ServiceName,
         serviceVersion: typeof(Program).Assembly.GetName().Version?.ToString() ?? "0.0.0"))
     .WithTracing(tracing => tracing
         .AddSource(AppActivitySource.Name)
@@ -294,7 +343,9 @@ string HashToken(string token)
     return Convert.ToHexString(bytes).ToLower();
 }
 
-string CreateAccessToken(User user, IConfiguration cfg)
+// Accepts a typed JwtOptions instead of IConfiguration so callers are not coupled
+// to the raw configuration API and the compiler enforces that the key is present.
+string CreateAccessToken(User user, JwtOptions opts)
 {
     var claims = new[]
     {
@@ -303,13 +354,13 @@ string CreateAccessToken(User user, IConfiguration cfg)
         new Claim("scope", "quotes.write")
     };
 
-    var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(cfg["Jwt:Key"]!));
+    var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(opts.Key));
 
     var jwtToken = new JwtSecurityToken(
-        issuer: cfg["Jwt:Issuer"],
-        audience: cfg["Jwt:Audience"],
-        claims: claims,
-        expires: DateTime.UtcNow.AddMinutes(Convert.ToDouble(cfg["Jwt:ExpiryMinutes"])),
+        issuer:             opts.Issuer,
+        audience:           opts.Audience,
+        claims:             claims,
+        expires:            DateTime.UtcNow.Add(opts.AccessTokenLifetime),
         signingCredentials: new SigningCredentials(key, SecurityAlgorithms.HmacSha256));
 
     return new JwtSecurityTokenHandler().WriteToken(jwtToken);
@@ -333,11 +384,11 @@ var app = builder.Build();
 // Loggers: Serilog LogContext.PushProperty in CorrelationIdMiddleware uses AsyncLocal
 //   so every log within a request automatically carries TraceId.
 // Metrics: aggregated across requests, never carry per-request identity.
-var loggerFactory = app.Services.GetRequiredService<ILoggerFactory>();
-var quotesLog = loggerFactory.CreateLogger("QuotesApi.Quotes");
-var authLog = loggerFactory.CreateLogger("QuotesApi.Auth");
-var collectionsLog = loggerFactory.CreateLogger("QuotesApi.Collections");
-var metrics = app.Services.GetRequiredService<ApiMetrics>();
+var loggerFactory   = app.Services.GetRequiredService<ILoggerFactory>();
+var quotesLog       = loggerFactory.CreateLogger("QuotesApi.Quotes");
+var authLog         = loggerFactory.CreateLogger("QuotesApi.Auth");
+var collectionsLog  = loggerFactory.CreateLogger("QuotesApi.Collections");
+var metrics         = app.Services.GetRequiredService<ApiMetrics>();
 
 // Pipeline order:
 //   RequestMetrics (outermost) — captures full duration + final status code
@@ -403,7 +454,7 @@ app.MapPost("/api/quotes", async (
     HttpContext httpContext,
     CancellationToken cancellationToken) =>
 {
-    var userId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
+    var userId    = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
     var userEmail = httpContext.User.FindFirstValue(ClaimTypes.Email) ?? string.Empty;
 
     // StartActivity returns null when no collector is listening — ?. makes every
@@ -626,10 +677,15 @@ app.MapDelete("/api/collections/{id}/items/{quoteId}", async (
 }).RequireAuthorization();
 
 
+// ── Auth endpoints ────────────────────────────────────────────────────────────
+// Both endpoints inject IOptionsSnapshot<JwtOptions> — the scoped (per-request)
+// variant — so that configuration changes take effect on the next request
+// without requiring an app restart.
+
 app.MapPost("/api/auth/login", async (
     LoginRequest request,
     AppDbContext db,
-    IConfiguration configuration,
+    IOptionsSnapshot<JwtOptions> jwtOptions,
     CancellationToken cancellationToken) =>
 {
     using var activity = AppActivitySource.Instance.StartActivity("auth.login");
@@ -647,16 +703,16 @@ app.MapPost("/api/auth/login", async (
         return Results.Unauthorized();
     }
 
-    var familyId = Guid.NewGuid().ToString();
-    var rawToken = GenerateRefreshToken();
-    var expiryDays = Convert.ToInt32(configuration["Jwt:RefreshExpiryDays"] ?? "7");
+    var opts       = jwtOptions.Value;
+    var familyId   = Guid.NewGuid().ToString();
+    var rawToken   = GenerateRefreshToken();
 
     db.RefreshTokens.Add(new RefreshToken
     {
         TokenHash = HashToken(rawToken),
-        UserId = user.Id,
-        FamilyId = familyId,
-        ExpiresAt = DateTime.UtcNow.AddDays(expiryDays)
+        UserId    = user.Id,
+        FamilyId  = familyId,
+        ExpiresAt = DateTime.UtcNow.Add(opts.RefreshTokenLifetime)
     });
 
     await db.SaveChangesAsync(cancellationToken);
@@ -670,16 +726,16 @@ app.MapPost("/api/auth/login", async (
 
     return Results.Ok(new
     {
-        access_token = CreateAccessToken(user, configuration),
+        access_token  = CreateAccessToken(user, opts),
         refresh_token = rawToken,
-        expires_in = 900
+        expires_in    = (int)opts.AccessTokenLifetime.TotalSeconds
     });
 });
 
 app.MapPost("/api/auth/refresh", async (
     RefreshRequest request,
     AppDbContext db,
-    IConfiguration configuration,
+    IOptionsSnapshot<JwtOptions> jwtOptions,
     CancellationToken cancellationToken) =>
 {
     using var activity = AppActivitySource.Instance.StartActivity("token.rotate");
@@ -732,18 +788,18 @@ app.MapPost("/api/auth/refresh", async (
         return Results.Unauthorized();
     }
 
-    var newRaw = GenerateRefreshToken();
-    var newHash = HashToken(newRaw);
-    var expiryDays = Convert.ToInt32(configuration["Jwt:RefreshExpiryDays"] ?? "7");
+    var opts     = jwtOptions.Value;
+    var newRaw   = GenerateRefreshToken();
+    var newHash  = HashToken(newRaw);
 
     stored.ReplacedByToken = newHash;
 
     db.RefreshTokens.Add(new RefreshToken
     {
         TokenHash = newHash,
-        UserId = stored.UserId,
-        FamilyId = stored.FamilyId,
-        ExpiresAt = DateTime.UtcNow.AddDays(expiryDays)
+        UserId    = stored.UserId,
+        FamilyId  = stored.FamilyId,
+        ExpiresAt = DateTime.UtcNow.Add(opts.RefreshTokenLifetime)
     });
 
     await db.SaveChangesAsync(cancellationToken);
@@ -756,9 +812,9 @@ app.MapPost("/api/auth/refresh", async (
 
     return Results.Ok(new
     {
-        access_token = CreateAccessToken(stored.User, configuration),
+        access_token  = CreateAccessToken(stored.User, opts),
         refresh_token = newRaw,
-        expires_in = 900
+        expires_in    = (int)opts.AccessTokenLifetime.TotalSeconds
     });
 });
 
