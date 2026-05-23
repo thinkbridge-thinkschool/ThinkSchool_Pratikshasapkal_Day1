@@ -478,36 +478,35 @@ app.MapGet("/api/quotes", async (
         .Take(size)
         .ToListAsync(cancellationToken);
 
-    // ── N+1 INTENTIONAL PERFORMANCE ISSUE ────────────────────────────────────
-    // For each quote on the page, a separate SELECT COUNT(*) round-trip is issued
-    // to count how many collection items reference it.
+    // ── Batched collection-count query (N+1 fix) ─────────────────────────────
+    // Single IN (...) + GROUP BY replaces N individual COUNT round-trips.
+    // Regardless of page size, exactly ONE child EF Core span is emitted.
     //
-    // With page size = 10 this produces 11 DB round-trips total:
-    //   1  × SELECT quotes (paged)
-    //   10 × SELECT COUNT(*) FROM CollectionItem WHERE QuoteId = ?
+    // DB round-trips per request (page size = 10):
+    //   Before fix: 11  (1 paged SELECT + 10 COUNT queries)
+    //   After fix:   2  (1 paged SELECT + 1 GROUP BY SELECT)
     //
-    // Visible in Jaeger as a "staircase" of EF Core child spans under quotes.list.
-    // Serilog warning below carries the same TraceId so both tools correlate.
+    // Span "quotes.collection-counts" tag strategy=batched confirms the fix in Jaeger.
+    var quoteIds = quotes.Select(q => q.Id).ToList();
+
     using var countActivity = AppActivitySource.Instance.StartActivity("quotes.collection-counts");
-    countActivity?.SetTag("strategy", "n+1");
+    countActivity?.SetTag("strategy", "batched");
     countActivity?.SetTag("quote.count", quotes.Count);
-    countActivity?.SetTag("queries.issued", quotes.Count);
+    countActivity?.SetTag("queries.issued", 1);
 
-    quotesLog.LogWarning(
-        "N+1 pattern: issuing {ExtraQueries} extra DB round-trips for {QuoteCount} quotes — TraceId={TraceId}",
-        quotes.Count, quotes.Count, Activity.Current?.TraceId.ToString());
+    var collectionCounts = await db.Collections
+        .SelectMany(c => c.Items)
+        .Where(i => quoteIds.Contains(i.QuoteId))
+        .GroupBy(i => i.QuoteId)
+        .Select(g => new { QuoteId = g.Key, Count = g.Count() })
+        .ToDictionaryAsync(x => x.QuoteId, x => x.Count, cancellationToken);
 
-    var results = new List<QuoteWithCollectionCount>(quotes.Count);
-    foreach (var q in quotes)
-    {
-        var collectionCount = await db.Collections
-            .SelectMany(c => c.Items)
-            .CountAsync(i => i.QuoteId == q.Id, cancellationToken);
-
-        results.Add(new QuoteWithCollectionCount(
-            q.Id, q.Author, q.Text, q.CreatedByEmail, q.IsDeleted, collectionCount));
-    }
-    // ── end N+1 ──────────────────────────────────────────────────────────────
+    var results = quotes
+        .Select(q => new QuoteWithCollectionCount(
+            q.Id, q.Author, q.Text, q.CreatedByEmail, q.IsDeleted,
+            collectionCounts.GetValueOrDefault(q.Id, 0)))
+        .ToList();
+    // ── end batched fix ───────────────────────────────────────────────────────
 
     activity?.SetTag("result.count", results.Count);
     quotesLog.LogInformation(
