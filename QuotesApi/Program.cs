@@ -478,11 +478,42 @@ app.MapGet("/api/quotes", async (
         .Take(size)
         .ToListAsync(cancellationToken);
 
-    activity?.SetTag("result.count", quotes.Count);
-    quotesLog.LogInformation(
-        "Returning {QuoteCount} quotes UserId={UserId} Page={Page}", quotes.Count, userId, page);
+    // ── N+1 INTENTIONAL PERFORMANCE ISSUE ────────────────────────────────────
+    // For each quote on the page, a separate SELECT COUNT(*) round-trip is issued
+    // to count how many collection items reference it.
+    //
+    // With page size = 10 this produces 11 DB round-trips total:
+    //   1  × SELECT quotes (paged)
+    //   10 × SELECT COUNT(*) FROM CollectionItem WHERE QuoteId = ?
+    //
+    // Visible in Jaeger as a "staircase" of EF Core child spans under quotes.list.
+    // Serilog warning below carries the same TraceId so both tools correlate.
+    using var countActivity = AppActivitySource.Instance.StartActivity("quotes.collection-counts");
+    countActivity?.SetTag("strategy", "n+1");
+    countActivity?.SetTag("quote.count", quotes.Count);
+    countActivity?.SetTag("queries.issued", quotes.Count);
 
-    return Results.Ok(quotes);
+    quotesLog.LogWarning(
+        "N+1 pattern: issuing {ExtraQueries} extra DB round-trips for {QuoteCount} quotes — TraceId={TraceId}",
+        quotes.Count, quotes.Count, Activity.Current?.TraceId.ToString());
+
+    var results = new List<QuoteWithCollectionCount>(quotes.Count);
+    foreach (var q in quotes)
+    {
+        var collectionCount = await db.Collections
+            .SelectMany(c => c.Items)
+            .CountAsync(i => i.QuoteId == q.Id, cancellationToken);
+
+        results.Add(new QuoteWithCollectionCount(
+            q.Id, q.Author, q.Text, q.CreatedByEmail, q.IsDeleted, collectionCount));
+    }
+    // ── end N+1 ──────────────────────────────────────────────────────────────
+
+    activity?.SetTag("result.count", results.Count);
+    quotesLog.LogInformation(
+        "Returning {QuoteCount} quotes UserId={UserId} Page={Page}", results.Count, userId, page);
+
+    return Results.Ok(results);
 }).RequireAuthorization();
 
 
