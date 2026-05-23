@@ -247,9 +247,41 @@ builder.Services.AddAuthorization(options =>
 builder.Services.AddScoped<IAuthorizationHandler, DeleteOwnQuoteHandler>();
 builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, LoggingAuthorizationResultHandler>();
 
+// ── SQLite path resolution ────────────────────────────────────────────────
+// "Data Source=quotes.db" is a bare relative path. In a Linux container the
+// working directory is often / (root), which the non-root app user cannot
+// write to → SQLite Error 14: 'unable to open database file'.
+//
+// Fix strategy:
+//   1. DOTNET_RUNNING_IN_CONTAINER=true is injected by every aspnet base image.
+//      When true, use /tmp/quotesapi-data — always writable by any Linux user,
+//      regardless of which UID the container process runs as.
+//   2. Outside containers, use AppContext.BaseDirectory/data — absolute,
+//      consistent, and never inside the source tree.
+//   3. Allow full override via ConnectionStrings__Default so production can
+//      mount a persistent volume at any path without rebuilding the image.
+//   4. Always create the parent directory of whichever path is in use,
+//      including a custom path supplied via the env var.
+var isContainer = Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER") == "true";
+var defaultDbDir = isContainer
+    ? "/tmp/quotesapi-data"
+    : Path.Combine(AppContext.BaseDirectory, "data");
+var defaultConnStr = $"Data Source={Path.Combine(defaultDbDir, "quotes.db")}";
+var connectionString = builder.Configuration.GetConnectionString("Default") ?? defaultConnStr;
+
+// Parse the final data source and ensure its parent directory exists.
+// This covers both the computed default and any custom path from config/env.
+var parsedSource = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder(connectionString).DataSource;
+if (!string.IsNullOrEmpty(parsedSource) && parsedSource != ":memory:")
+{
+    var dbParentDir = Path.GetDirectoryName(Path.GetFullPath(parsedSource));
+    if (!string.IsNullOrEmpty(dbParentDir))
+        Directory.CreateDirectory(dbParentDir);
+}
+
 builder.Services.AddDbContext<AppDbContext>((serviceProvider, options) =>
 {
-    options.UseSqlite("Data Source=quotes.db");
+    options.UseSqlite(connectionString);
 });
 
 builder.Services.AddScoped<ICollectionRepository, CollectionRepository>();
@@ -411,6 +443,9 @@ app.UseAuthorization();
 
 
 app.MapGet("/", () => "Quotes API Running");
+
+// Health endpoint — used by Docker health checks and orchestrators
+app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 
 
 app.MapPost("/api/quotes", async (
@@ -815,13 +850,17 @@ app.MapPost("/api/auth/refresh", async (
 if (!app.Environment.IsEnvironment("Testing"))
 {
     using var scope = app.Services.CreateScope();
-
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-    if (!db.Users.Any())
+    // Apply all pending EF migrations at startup — safe no-op when schema is
+    // already current. Required in containers: a fresh image has no quotes.db
+    // and no schema, so every table must be created before any query runs.
+    await db.Database.MigrateAsync();
+
+    if (!await db.Users.AnyAsync())
     {
         db.Users.Add(new User("admin@example.com", "password123"));
-        db.SaveChanges();
+        await db.SaveChangesAsync();
     }
 }
 
