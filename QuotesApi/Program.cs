@@ -14,6 +14,9 @@ using QuotesApi.Repositories;
 using QuotesApi.Services;
 using QuotesApi.Telemetry;
 using QuotesApi.Utilities;
+using Azure.Identity;
+using Azure.Monitor.OpenTelemetry.AspNetCore;
+using Azure.Security.KeyVault.Secrets;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Serilog;
@@ -209,13 +212,13 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddMetrics();
 builder.Services.AddSingleton<ApiMetrics>();
 
-// OpenTelemetry distributed tracing.
+// OpenTelemetry + Azure Monitor / Application Insights.
 //
 // Logs vs traces:
 //   Logs (Serilog) record discrete events — "Quote created QuoteId=7".
 //   Traces record causally-linked spans with start/end timing and a parent–child
 //   hierarchy that shows the full call tree for a single request.
-//   Both are correlated via the same 32-char W3C TraceId.
+//   Both are correlated via the same 32-char W3C TraceId (see CorrelationIdMiddleware).
 //
 // Automatic instrumentation — zero application code:
 //   AddAspNetCoreInstrumentation → one root span per HTTP request
@@ -223,30 +226,59 @@ builder.Services.AddSingleton<ApiMetrics>();
 //   AddHttpClientInstrumentation → one child span per outbound HTTP call (Entra OIDC)
 //
 // Custom instrumentation — AppActivitySource spans in endpoint handlers:
-//   Business operations the frameworks can't observe (quote.create, token.rotate, …).
+//   Business operations the frameworks cannot observe (quote.create, token.rotate, …).
 //   Each StartActivity() call creates a child of Activity.Current (the request span).
 //
-// Serilog TraceId alignment:
-//   CorrelationIdMiddleware reads Activity.Current.TraceId, so every log line
-//   carries the same ID as the OTel span — one search finds both logs and traces.
+// Azure Monitor connection string — never hardcoded, loaded in priority order:
+//   1. Azure Key Vault  (KeyVault:Uri set in config → secret "appinsights-connection-string")
+//   2. Environment variable  APPLICATIONINSIGHTS_CONNECTION_STRING  (staging / CI)
+//   3. Absent → UseAzureMonitor() is registered but silently inactive (no-op exporter)
 //
-// Collector configuration (no code change needed):
-//   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317  (Jaeger / Grafana Tempo / Honeycomb)
-//   OTEL_EXPORTER_OTLP_PROTOCOL=grpc                  (default)
-//   OTEL_SERVICE_NAME=QuotesApi                        (overrides the value below)
-builder.Services.AddOpenTelemetry()
+// DefaultAzureCredential resolution order:
+//   In Azure (App Service / AKS): ManagedIdentityCredential  — zero config needed
+//   Locally: AzureCliCredential  — run `az login` once
+//
+// Local development:
+//   Set OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 to also send to Jaeger/Tempo.
+//   Leave unset in production — OTLP exporter fails silently if no collector is reachable.
+
+// ── Load App Insights connection string from Key Vault ────────────────────
+var appInsightsCs = builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
+var kvUri = builder.Configuration["KeyVault:Uri"];
+
+if (string.IsNullOrEmpty(appInsightsCs) && !string.IsNullOrEmpty(kvUri))
+{
+    try
+    {
+        var kvClient = new SecretClient(new Uri(kvUri), new DefaultAzureCredential());
+        appInsightsCs = kvClient.GetSecret("appinsights-connection-string").Value.Value;
+    }
+    catch (Exception ex)
+    {
+        // Non-fatal: telemetry gaps are preferable to crashing the application.
+        // Serilog is not yet configured here so write to stderr directly.
+        Console.Error.WriteLine(
+            $"[WARN] Key Vault secret load failed — Azure Monitor inactive: {ex.Message}");
+    }
+}
+
+// UseAzureMonitor() throws at startup when no connection string is available,
+// so gate it explicitly. When inactive, OTLP (Jaeger/Tempo) is still exported.
+var otelBuilder = builder.Services.AddOpenTelemetry();
+
+if (!string.IsNullOrEmpty(appInsightsCs))
+    otelBuilder.UseAzureMonitor(opts => opts.ConnectionString = appInsightsCs);
+
+otelBuilder
     .ConfigureResource(r => r.AddService(
         serviceName: builder.Configuration["OpenTelemetry:ServiceName"] ?? "QuotesApi",
         serviceVersion: typeof(Program).Assembly.GetName().Version?.ToString() ?? "0.0.0"))
     .WithTracing(tracing => tracing
-        .AddSource(AppActivitySource.Name)          // custom business spans
-        .AddAspNetCoreInstrumentation(opts =>
-        {
-            opts.RecordException = true;
-        })
-        .AddEntityFrameworkCoreInstrumentation()    // child span per EF query
-        .AddHttpClientInstrumentation()             // child span for Entra calls
-        .AddOtlpExporter());
+        .AddSource(AppActivitySource.Name)
+        .AddAspNetCoreInstrumentation(opts => { opts.RecordException = true; })
+        .AddEntityFrameworkCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddOtlpExporter());   // local Jaeger/Tempo; no-op if OTEL_EXPORTER_OTLP_ENDPOINT unset
 
 
 string GenerateRefreshToken()

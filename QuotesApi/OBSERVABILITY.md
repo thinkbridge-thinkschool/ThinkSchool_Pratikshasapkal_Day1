@@ -209,6 +209,214 @@ No code change is needed — `AddOtlpExporter()` reads the env var automatically
 
 ---
 
+## Azure Monitor / Application Insights (Production)
+
+### Required Azure resources
+
+| Resource | Purpose |
+|---|---|
+| Application Insights | Receives traces, metrics, and logs |
+| Log Analytics Workspace | Backend store for App Insights |
+| Key Vault | Holds the connection string secret |
+| Managed Identity | Grants the app read access to Key Vault |
+
+### Key Vault secret
+
+Create one secret in Key Vault with exactly this name:
+
+```
+appinsights-connection-string
+```
+
+Value: the full Application Insights connection string, e.g.
+`InstrumentationKey=…;IngestionEndpoint=https://…;LiveEndpoint=https://…`
+
+Grant the app's Managed Identity the **Key Vault Secrets User** role on the vault.
+
+### Configuration
+
+Set `KeyVault:Uri` to your vault URL — **never the connection string itself**:
+
+```json
+// appsettings.Production.json  (NOT committed — listed in .gitignore)
+{
+  "KeyVault": {
+    "Uri": "https://your-vault.vault.azure.net/"
+  }
+}
+```
+
+**Local development fallback** (no Key Vault required):
+
+```powershell
+$env:APPLICATIONINSIGHTS_CONNECTION_STRING = "InstrumentationKey=…"
+dotnet run --project day-1/QuotesApi
+```
+
+Run `az login` once so `DefaultAzureCredential` can use `AzureCliCredential`
+when `KeyVault:Uri` is set locally.
+
+### What gets exported to App Insights
+
+| Signal | Source | App Insights table |
+|---|---|---|
+| Distributed traces | OTel + custom spans | `dependencies`, `requests` |
+| Metrics | `ApiMetrics` (System.Diagnostics.Metrics) | `customMetrics` |
+| Logs | `ILogger<T>` → OTel log pipeline | `traces` |
+
+> **Note on Serilog logs**: `UseSerilog()` replaces the `ILogger` provider pipeline,
+> so OTel's log exporter does not receive Serilog output directly. For full log
+> ingestion in production, either: (a) add `Serilog.Sinks.OpenTelemetry` and point
+> it at the OTLP endpoint, or (b) use `Serilog.Sinks.ApplicationInsights` alongside
+> the connection string from Key Vault.
+
+### TraceId correlation across all three signals
+
+```
+User request
+  │
+  ├── OTel root span  (AspNetCore instrumentation)
+  │     TraceId = 4bf92f3577b34da6a3ce929d0e0e4736
+  │
+  ├── CorrelationIdMiddleware pushes TraceId into Serilog LogContext
+  │     → every log line: { "TraceId": "4bf92f3577b34da6a3ce929d0e0e4736" }
+  │
+  └── Azure Monitor exporter ships both to App Insights
+        → search App Insights by operation_Id = "4bf92f3577b34da6a3ce929d0e0e4736"
+          to see logs + traces for one request in a single view
+```
+
+`operation_Id` in App Insights maps to the W3C `traceId`. The Serilog `TraceId`
+property is stored in `customDimensions.TraceId` and holds the same value.
+
+---
+
+## KQL Queries
+
+### Traces for a specific user (last 15 minutes)
+
+```kql
+traces
+| where timestamp > ago(15m)
+| where customDimensions.UserId == "1"
+| order by timestamp asc
+```
+
+### All spans for a single request (by TraceId)
+
+```kql
+union traces, requests, dependencies
+| where operation_Id == "4bf92f3577b34da6a3ce929d0e0e4736"
+| order by timestamp asc
+| project timestamp, itemType, name, duration, success, customDimensions
+```
+
+### Failed logins in the last hour
+
+```kql
+traces
+| where timestamp > ago(1h)
+| where message has "Login failed"
+| summarize count() by bin(timestamp, 5m)
+| render timechart
+```
+
+### Token reuse attacks detected
+
+```kql
+traces
+| where timestamp > ago(24h)
+| where customDimensions["token.rotate.result"] == "reuse_detected"
+   or message has "reuse detected"
+| project timestamp, operation_Id, customDimensions
+```
+
+### Slow quote creation (p95 latency by hour)
+
+```kql
+dependencies
+| where timestamp > ago(24h)
+| where name == "quote.create"
+| summarize p50=percentile(duration, 50), p95=percentile(duration, 95) by bin(timestamp, 1h)
+| render timechart
+```
+
+### EF Core query hotspots
+
+```kql
+dependencies
+| where timestamp > ago(1h)
+| where type == "sqlite" or type == "SQL"
+| top 20 by duration desc
+| project timestamp, name, duration, data, operation_Id
+```
+
+---
+
+## Azure Monitor Alerts
+
+### Alert: POST /api/quotes slow (> 500 ms avg over 5 min)
+
+**Condition** (Metric alert on Application Insights):
+
+| Field | Value |
+|---|---|
+| Signal | `requests/duration` |
+| Filter | `request/name == POST /api/quotes` |
+| Aggregation | Average |
+| Threshold | > 500 ms |
+| Evaluation window | 5 minutes |
+| Frequency | 1 minute |
+
+**Action group**: create an action group in Azure Monitor with:
+- Action type: Email/SMS/Push/Voice
+- Email: `oncall@your-domain.com`
+- Name: `quotes-oncall`
+
+Attach the action group to the alert rule. ARM template fragment:
+
+```json
+{
+  "type": "Microsoft.Insights/scheduledQueryRules",
+  "properties": {
+    "severity": 2,
+    "evaluationFrequency": "PT1M",
+    "windowSize": "PT5M",
+    "criteria": {
+      "allOf": [{
+        "query": "requests | where name == 'POST /api/quotes' | summarize avg(duration)",
+        "threshold": 500,
+        "operator": "GreaterThan",
+        "timeAggregation": "Average"
+      }]
+    },
+    "actions": { "actionGroups": ["<action-group-resource-id>"] }
+  }
+}
+```
+
+### Alert: authentication failures spike
+
+```kql
+// Fires when > 10 failed logins in 5 minutes
+traces
+| where timestamp > ago(5m)
+| where message has "Login failed"
+| count
+```
+
+Threshold: `> 10`, window: 5 min, severity: 1 (Critical).
+
+### Production alerting guidance
+
+- **Severity 1** (Critical): token reuse detected, auth failure spike, 5xx error rate > 1%
+- **Severity 2** (Warning): p95 response time > 500 ms, EF query > 200 ms avg
+- **Severity 3** (Info): login rate anomaly, unusual quote-creation volume
+- Always attach alerts to an action group; avoid per-alert email configuration
+- Use **dynamic thresholds** for rate-based metrics (login/min) to handle traffic variation
+
+---
+
 ## Commit Hash
 
 | Commit | Description |

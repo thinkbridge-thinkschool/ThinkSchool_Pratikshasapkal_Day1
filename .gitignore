@@ -1,2 +1,9 @@
 bin/
 obj/
+
+# Never commit secrets or environment-specific overrides
+appsettings.Production.json
+appsettings.*.local.json
+*.secrets.json
+.env
+.env.*
