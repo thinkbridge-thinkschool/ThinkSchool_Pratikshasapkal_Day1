@@ -17,9 +17,11 @@ public class CancellationTests : IClassFixture<WebApplicationFactory<Program>>
     {
         _factory = factory.WithWebHostBuilder(builder =>
         {
+            // Skip MigrateAsync() and the seeding block in Program.cs.
+            builder.UseEnvironment("Testing");
+
             builder.ConfigureServices(services =>
             {
-                builder.UseEnvironment("Testing");
                 // Replace SQLite with an isolated in-memory database so tests
                 // don't touch the file system and don't share state.
                 var descriptors = services

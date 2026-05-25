@@ -1,11 +1,13 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using QuotesApi.Data;
+using QuotesApi.Models;
 
 namespace QuotesApi.Tests;
 
@@ -17,12 +19,14 @@ public class AuthTests : IClassFixture<WebApplicationFactory<Program>>
     {
         _factory = factory.WithWebHostBuilder(builder =>
         {
+            // "Testing" makes Program.cs skip MigrateAsync() and its seeding block,
+            // so we control schema creation and seeding entirely from here.
+            builder.UseEnvironment("Testing");
+
             builder.ConfigureServices(services =>
             {
                 // Use a shared open in-memory SQLite connection so the seeding
-                // block in Program.cs and request handlers all see the same data.
-                // EnsureCreated is called here, before the seeding block runs,
-                // so the Users table exists when Program.cs tries to seed it.
+                // done below and request handlers all see the same data.
                 var connection = new SqliteConnection("Data Source=:memory:");
                 connection.Open();
 
@@ -37,6 +41,13 @@ public class AuthTests : IClassFixture<WebApplicationFactory<Program>>
                 optBuilder.UseSqlite(connection);
                 using var ctx = new AppDbContext(optBuilder.Options);
                 ctx.Database.EnsureCreated();
+
+                // Seed the admin user since Program.cs seeding is skipped in Testing.
+                if (!ctx.Users.Any())
+                {
+                    ctx.Users.Add(new User("admin@example.com", "password123"));
+                    ctx.SaveChanges();
+                }
             });
         });
     }
