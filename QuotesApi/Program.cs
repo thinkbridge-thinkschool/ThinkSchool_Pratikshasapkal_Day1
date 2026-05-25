@@ -344,6 +344,41 @@ if (string.IsNullOrEmpty(appInsightsCs) && kvCfg.IsConfigured)
     }
 }
 
+// ── Classic Application Insights SDK ─────────────────────────────────────────
+// WHY THIS EXISTS alongside UseAzureMonitor() below:
+//
+// Azure.Monitor.OpenTelemetry.AspNetCore is an OTel "distro" — it internally
+// pins specific OTel SDK versions.  This project also references
+// OpenTelemetry.Instrumentation.* 1.15.x packages at HIGHER versions than the
+// distro was built against.  NuGet resolves all OTel packages to the higher
+// version, which silently breaks the distro's TRACE export path (metrics use a
+// separate path and still arrive).  Result: the 'requests' table stays empty
+// even though customMetric / http.server.active_requests appear fine.
+//
+// AddApplicationInsightsTelemetry() bypasses OTel entirely.  It registers
+// RequestTrackingTelemetryModule, which hooks into ASP.NET Core's DiagnosticSource
+// pipeline and emits RequestTelemetry directly via TelemetryClient →
+// Application Insights 'requests' table.  This makes the following KQL work:
+//
+//   requests
+//   | where timestamp > ago(30m)
+//   | summarize count(), p50=percentile(duration,50), p99=percentile(duration,99) by name
+//   | order by p99 desc
+//
+// Coexistence with the OTel pipeline:
+//   • AI SDK  → requests, dependencies, exceptions tables  (reliable, classic schema)
+//   • OTel    → customMetrics (http.server.active_requests, etc.), custom spans
+//   No duplication in 'requests': the OTel trace→requests path is broken, so
+//   only the AI SDK writes there.
+//
+// Connection string: reuses appInsightsCs already resolved from Key Vault /
+// APPLICATIONINSIGHTS_CONNECTION_STRING env var above — no second lookup needed.
+if (!string.IsNullOrEmpty(appInsightsCs))
+{
+    builder.Services.AddApplicationInsightsTelemetry(options =>
+        options.ConnectionString = appInsightsCs);
+}
+
 // UseAzureMonitor() throws at startup when no connection string is available,
 // so gate it explicitly. When inactive, OTLP (Jaeger/Tempo) is still exported.
 var otelBuilder = builder.Services.AddOpenTelemetry();
