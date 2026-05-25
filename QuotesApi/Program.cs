@@ -19,8 +19,10 @@ using QuotesApi.Utilities;
 using Azure.Identity;
 using Azure.Monitor.OpenTelemetry.AspNetCore;
 using Azure.Security.KeyVault.Secrets;
+using Microsoft.Extensions.Http.Resilience;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
+using Polly;
 using Serilog;
 using Serilog.Events;
 using System.Diagnostics;
@@ -292,6 +294,196 @@ builder.Services.AddMetrics();
 builder.Services.AddSingleton<ApiMetrics>();
 // Singleton: uses IOptions<JwtOptions> (frozen at startup), so singleton lifetime is correct.
 builder.Services.AddSingleton<ITokenService, TokenService>();
+
+// ── Outbound HTTP: Quote Enrichment Service ───────────────────────────────────
+//
+// Scoped: IHttpClientFactory (singleton) is safe to inject into scoped services.
+// The factory creates a new HttpClient wrapper per call but shares the pooled
+// SocketsHttpHandler so neither socket exhaustion nor DNS staleness can occur.
+builder.Services.AddScoped<IQuoteEnrichmentService, QuoteEnrichmentService>();
+
+// Named HttpClient "quote-enrichment" with a four-layer Polly v8 resilience pipeline.
+//
+// PIPELINE EXECUTION ORDER (outer → inner; each layer wraps everything inside it):
+//
+//  ┌──────────────────────────────────────────────────────────────────────────┐
+//  │  Layer 1 — Total request timeout  (10 s)                                 │
+//  │    Hard ceiling for the ENTIRE operation including all retries.           │
+//  │    TimeoutRejectedException propagates if the budget is exceeded anywhere.│
+//  │  ┌────────────────────────────────────────────────────────────────────┐  │
+//  │  │  Layer 2 — Retry  (3×, exponential back-off, jitter)              │  │
+//  │  │    Re-runs layers 3 + 4 + the HTTP call on transient failure.     │  │
+//  │  │    Handles: HttpRequestException, 5xx, 408, 429.                  │  │
+//  │  │    Does NOT handle BrokenCircuitException → it propagates out.    │  │
+//  │  │  ┌──────────────────────────────────────────────────────────────┐ │  │
+//  │  │  │  Layer 3 — Circuit Breaker  (50% / 30 s window)             │ │  │
+//  │  │  │    Counts every attempt (including retries) toward the rate. │ │  │
+//  │  │  │    OPEN state: immediately throws BrokenCircuitException     │ │  │
+//  │  │  │    → retry does NOT catch it → propagates to caller (503).   │ │  │
+//  │  │  │  ┌────────────────────────────────────────────────────────┐  │ │  │
+//  │  │  │  │  Layer 4 — Per-attempt timeout  (3 s)                  │  │ │  │
+//  │  │  │  │    Caps each individual HTTP round-trip.               │  │ │  │
+//  │  │  │  │    TimeoutRejectedException → caught by retry layer    │  │ │  │
+//  │  │  │  │    → counts as transient failure → next retry.         │  │ │  │
+//  │  │  │  │  ┌──────────────────────────────────────────────────┐  │  │ │  │
+//  │  │  │  │  │  Actual HTTP call                                │  │  │ │  │
+//  │  │  │  │  └──────────────────────────────────────────────────┘  │  │ │  │
+//  │  │  │  └────────────────────────────────────────────────────────┘  │ │  │
+//  │  │  └──────────────────────────────────────────────────────────────┘ │  │
+//  │  └────────────────────────────────────────────────────────────────────┘  │
+//  └──────────────────────────────────────────────────────────────────────────┘
+//
+// COMPATIBILITY WITH OpenTelemetry HttpClient instrumentation:
+//   AddHttpClientInstrumentation() hooks into SocketsHttpHandler via DiagnosticListener.
+//   Polly adds DelegatingHandlers on top of that handler — OTel still sees every
+//   actual HTTP call, and each retry attempt produces its own OTel span.
+//   All spans share the same W3C TraceId (from Activity.Current) so retry spans
+//   appear as siblings under the parent request span in Jaeger / App Insights.
+builder.Services
+    .AddHttpClient("quote-enrichment", client =>
+    {
+        // BaseAddress comes from config; fall back to a placeholder so startup
+        // always succeeds.  Override per environment:
+        //   appsettings.Production.json  →  "QuoteEnrichment": { "BaseUrl": "https://…" }
+        //   env var                      →  QuoteEnrichment__BaseUrl=https://…
+        client.BaseAddress = new Uri(
+            builder.Configuration["QuoteEnrichment:BaseUrl"] ?? "https://api.example.com");
+
+        client.DefaultRequestHeaders.Add("Accept", "application/json");
+
+        // Disable HttpClient's own 100 s timeout.
+        // Polly manages all timeouts via AddTimeout() below.
+        // Without this line, the default timeout races with (and can beat) the
+        // Polly total timeout, producing a confusing TaskCanceledException instead
+        // of the expected TimeoutRejectedException.
+        client.Timeout = Timeout.InfiniteTimeSpan;
+    })
+    .AddResilienceHandler(
+        "quote-enrichment-pipeline",
+        // The second overload provides ResilienceHandlerContext.ServiceProvider so
+        // we can resolve the logger from DI at pipeline-construction time.
+        // The pipeline instance is created once per named-client registration,
+        // not per request, so this is safe for singleton-scoped services.
+        (pipeline, context) =>
+        {
+            var logger = context.ServiceProvider
+                .GetRequiredService<ILoggerFactory>()
+                .CreateLogger("QuotesApi.HttpResilience");
+
+            // ── Layer 1: Total request timeout ─────────────────────────────────
+            // Wraps everything.  If the complete operation (all retries included)
+            // takes longer than 10 s, TimeoutRejectedException is thrown.
+            pipeline.AddTimeout(TimeSpan.FromSeconds(10));
+
+            // ── Layer 2: Retry with exponential back-off + jitter ───────────────
+            // HttpRetryStrategyOptions pre-configures ShouldHandle to catch:
+            //   HttpRequestException  (network errors, DNS failures, TLS errors)
+            //   HTTP 5xx              (server-side errors)
+            //   HTTP 408              (request timeout)
+            //   HTTP 429              (rate limited — respects Retry-After header)
+            //
+            // Back-off schedule (base 1 s, Exponential, with random jitter ±50%):
+            //   Attempt 1 fails → wait ~1 s  → retry 1
+            //   Retry 1 fails   → wait ~2 s  → retry 2
+            //   Retry 2 fails   → wait ~4 s  → retry 3
+            //   Retry 3 fails   → HttpRequestException propagates to caller
+            //
+            // Total retry overhead ≈ 1 + 2 + 4 = 7 s worst-case (within the 10 s
+            // total budget; actual delays are shorter due to jitter).
+            pipeline.AddRetry(new HttpRetryStrategyOptions
+            {
+                MaxRetryAttempts = 3,
+                BackoffType      = DelayBackoffType.Exponential,
+                UseJitter        = true,
+                Delay            = TimeSpan.FromSeconds(1),
+
+                // Called before each retry delay begins.
+                // AttemptNumber is 0-indexed: 0 = first retry, 1 = second, …
+                OnRetry = args =>
+                {
+                    // These log lines correlate with the OTel spans emitted by
+                    // AddHttpClientInstrumentation() for each attempt — same TraceId.
+                    logger.LogWarning(
+                        "HTTP retry {Attempt}/{Max} in {DelayMs:N0} ms — {Reason}",
+                        args.AttemptNumber + 1,
+                        3,
+                        args.RetryDelay.TotalMilliseconds,
+                        args.Outcome.Exception?.Message
+                            ?? $"HTTP {(int?)args.Outcome.Result?.StatusCode}");
+
+                    return default; // ValueTask; no async work needed here
+                }
+            });
+
+            // ── Layer 3: Circuit Breaker ────────────────────────────────────────
+            // Prevents the API from hammering a downstream service that is
+            // clearly unavailable (avoids thundering-herd / retry storms).
+            //
+            // State machine:
+            //
+            //   CLOSED ──(≥50% failures in 30 s window, min 5 requests)──► OPEN
+            //     ↑                                                           │
+            //     └──(probe succeeds)── HALF-OPEN ◄──(break duration 15 s)───┘
+            //                               │
+            //                         (probe fails)
+            //                               │
+            //                             OPEN (reset timer)
+            //
+            // MinimumThroughput = 5:  the circuit cannot open until at least 5
+            //   requests have been observed in the sampling window.  Prevents
+            //   the CB from tripping on a single slow startup request.
+            //
+            // BreakDuration = 15 s: how long the circuit stays OPEN before one
+            //   probe request is allowed through (HALF-OPEN state).
+            //
+            // The CB is INSIDE the retry so that:
+            //   • Each retry attempt counts toward the failure rate (realistic signal).
+            //   • When the circuit opens, BrokenCircuitException propagates through
+            //     the retry layer (not in ShouldHandle) → immediate fail-fast, no
+            //     more retry delays, no wasted wait time.
+            pipeline.AddCircuitBreaker(new HttpCircuitBreakerStrategyOptions
+            {
+                SamplingDuration  = TimeSpan.FromSeconds(30),
+                MinimumThroughput = 5,
+                FailureRatio      = 0.5,
+                BreakDuration     = TimeSpan.FromSeconds(15),
+
+                OnOpened = args =>
+                {
+                    logger.LogError(
+                        "Circuit breaker OPENED for {BreakSec:N0} s — " +
+                        "failure rate exceeded 50% in the last 30 s window. " +
+                        "All calls will fast-fail until the circuit half-opens.",
+                        args.BreakDuration.TotalSeconds);
+                    return default;
+                },
+                OnClosed = args =>
+                {
+                    logger.LogInformation(
+                        "Circuit breaker CLOSED — downstream service has recovered.");
+                    return default;
+                },
+                OnHalfOpened = args =>
+                {
+                    logger.LogInformation(
+                        "Circuit breaker HALF-OPEN — sending one probe request.");
+                    return default;
+                }
+            });
+
+            // ── Layer 4: Per-attempt timeout ────────────────────────────────────
+            // Caps each individual HTTP round-trip to 3 s, independently of the
+            // outer 10 s total budget.
+            //
+            // Interaction with retry:
+            //   TimeoutRejectedException thrown here propagates to the retry layer.
+            //   The retry layer does NOT catch TimeoutRejectedException in its
+            //   default ShouldHandle, so the exception propagates outward.
+            //
+            // If you want slow responses to be retried, change ShouldHandle in the
+            // retry layer to also handle TimeoutRejectedException.
+            pipeline.AddTimeout(TimeSpan.FromSeconds(3));
+        });
 
 // OpenTelemetry + Azure Monitor / Application Insights.
 //
@@ -601,6 +793,79 @@ app.MapGet("/api/quotes/{id}", async (
 }).RequireAuthorization();
 
 
+// ── GET /api/quotes/{id}/enriched ─────────────────────────────────────────────
+// Demo endpoint: fetches a quote then calls the external enrichment service via
+// the resilient HttpClient to add sentiment / keyword metadata.
+//
+// Resilience exception → HTTP status mapping:
+//
+//   BrokenCircuitException   → 503 Service Unavailable  (circuit OPEN; downstream down)
+//   TimeoutRejectedException → 504 Gateway Timeout      (total or per-attempt budget hit)
+//   HttpRequestException     → 502 Bad Gateway           (retries exhausted or HTTP error)
+//   OperationCanceledException → re-thrown               (caller cancelled; ASP.NET returns 499)
+//
+// Trace visibility in Jaeger / Application Insights:
+//   Each retry attempt produces a child HttpClient span under this request's root span.
+//   The retry log lines ("HTTP retry 1/3 …") carry the same TraceId, so you can
+//   cross-reference OTel spans with structured log entries in KQL:
+//
+//     traces
+//     | where customDimensions.TraceId == "<id>"
+//     | order by timestamp asc
+app.MapGet("/api/quotes/{id}/enriched", async (
+    int id,
+    AppDbContext db,
+    IQuoteEnrichmentService enrichment,
+    CancellationToken cancellationToken) =>
+{
+    var quote = await db.Quotes
+        .FirstOrDefaultAsync(q => q.Id == id && !q.IsDeleted, cancellationToken);
+
+    if (quote is null)
+        return Results.NotFound();
+
+    try
+    {
+        var result = await enrichment.EnrichAsync(quote.Text, cancellationToken);
+
+        return Results.Ok(new
+        {
+            quote.Id,
+            quote.Author,
+            quote.Text,
+            result.Sentiment,
+            result.Confidence,
+            result.Keywords
+        });
+    }
+    catch (Polly.CircuitBreaker.BrokenCircuitException)
+    {
+        // Circuit is OPEN — downstream rejected immediately without an HTTP call.
+        // Retry again after the break duration (15 s) has elapsed.
+        return Results.Problem(
+            detail: "Enrichment service is temporarily unavailable. Please retry shortly.",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (Polly.Timeout.TimeoutRejectedException)
+    {
+        // Either the 10 s total budget or the 3 s per-attempt timeout was exceeded.
+        return Results.Problem(
+            detail: "Enrichment service did not respond in time.",
+            statusCode: StatusCodes.Status504GatewayTimeout);
+    }
+    catch (HttpRequestException ex)
+    {
+        // All 3 retries were exhausted, or a non-transient HTTP error occurred.
+        quotesLog.LogError(ex,
+            "Enrichment service unavailable after retries QuoteId={QuoteId}", id);
+
+        return Results.Problem(
+            detail: $"Enrichment service failed: {ex.Message}",
+            statusCode: StatusCodes.Status502BadGateway);
+    }
+}).RequireAuthorization();
+
+
 // Soft-delete — ownership enforced by DeleteOwnQuoteHandler, which logs denial
 app.MapDelete("/api/quotes/{id}", async (
     int id,
@@ -880,6 +1145,145 @@ app.MapPost("/api/auth/refresh", async (
         expires_in    = (int)tokens.AccessTokenLifetime.TotalSeconds
     });
 });
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// ⚠  TEMPORARY — DEVELOPMENT/TESTING ONLY  ⚠
+//
+//  GET /api/test/resilience
+//
+//  Purpose:
+//    A no-auth endpoint that intentionally fires EnrichAsync("test") against
+//    the configured BaseUrl ("https://api.example.com" unless overridden).
+//    Because the target is unreachable the Polly resilience pipeline activates
+//    every time, letting you observe retry logs, circuit-breaker state changes,
+//    and timeout behaviour live.
+//
+//  HOW TO REMOVE:
+//    Delete this block (between the two ════ banners) before going to production.
+//    The surrounding production endpoints are NOT affected.
+//
+//  How to trigger each resilience behaviour:
+//
+//    Retries + exponential back-off
+//      → Call the endpoint once with BaseUrl pointing to a non-existent host.
+//         Watch the console/Application Insights for:
+//           WARN  HTTP retry 1/3 in ~1000 ms — …
+//           WARN  HTTP retry 2/3 in ~2000 ms — …
+//           WARN  HTTP retry 3/3 in ~4000 ms — …
+//         The endpoint returns 502 once all retries are exhausted.
+//
+//    Circuit Breaker opening (50 % failure rate, ≥5 requests in 30 s window)
+//      → Hit the endpoint ≥5 times quickly (curl loop / k6 / hey).
+//         After the 5th failure you will see:
+//           ERROR Circuit breaker OPENED for 15 s …
+//         Subsequent calls return 503 immediately — no HTTP attempt, no wait.
+//
+//    Circuit Breaker closing (HALF-OPEN probe)
+//      → Wait 15 s after the circuit opened, then send one more request.
+//         If it fails: circuit re-opens.
+//         Watch for:
+//           INFO  Circuit breaker HALF-OPEN — sending one probe request.
+//           INFO  Circuit breaker CLOSED — downstream service has recovered.
+//
+//    Total timeout (10 s budget including retries)
+//      → Point QuoteEnrichment__BaseUrl at a slow host that never responds.
+//         After 10 s you will see TimeoutRejectedException → 504.
+//
+//    Per-attempt timeout (3 s per round-trip)
+//      → Same as above but with a host that accepts the connection then stalls.
+//         Each individual attempt times out after 3 s; the retry adds jitter and
+//         tries again until the 10 s total budget is consumed.
+//
+//  How to observe logs:
+//    Local:       dotnet run  → structured console output (Serilog)
+//    Azure ACA:   az containerapp logs show -n quotes-api -g <rg> --follow
+//    App Insights: traces | where message startswith "HTTP retry"
+//                          | order by timestamp asc
+//
+//  How to run a quick loop to trip the circuit breaker (bash / PowerShell):
+//    for i in {1..8}; do curl -s -o /dev/null -w "%{http_code}\n" \
+//        https://<host>/api/test/resilience; done
+// ════════════════════════════════════════════════════════════════════════════
+app.MapGet("/api/test/resilience", async (
+    IQuoteEnrichmentService enrichment,
+    ILoggerFactory loggerFactory,
+    CancellationToken cancellationToken) =>
+{
+    // Resolve a local logger so we can add context around the call.
+    var log = loggerFactory.CreateLogger("QuotesApi.ResilienceTest");
+
+    log.LogInformation(
+        "Resilience test: calling EnrichAsync(\"test\") against BaseUrl {BaseUrl}. " +
+        "Expect retries, circuit-breaker events, and/or timeout logs below.",
+        "QuoteEnrichment:BaseUrl");
+
+    try
+    {
+        // Calls the outbound HttpClient "quote-enrichment" which is backed by the
+        // four-layer Polly pipeline:
+        //   Total timeout (10 s) → Retry (3×) → Circuit Breaker (50%/30 s) → Per-attempt timeout (3 s)
+        //
+        // With BaseUrl = "https://api.example.com" (the default placeholder) the
+        // connection will be refused/timed-out, so the full retry cycle runs.
+        var result = await enrichment.EnrichAsync("test", cancellationToken);
+
+        // Reached only if BaseUrl points to a real service that returns valid JSON.
+        log.LogInformation(
+            "Resilience test SUCCEEDED Sentiment={Sentiment} Confidence={Confidence}",
+            result.Sentiment, result.Confidence);
+
+        return Results.Ok(new
+        {
+            status     = "succeeded",
+            sentiment  = result.Sentiment,
+            confidence = result.Confidence,
+            keywords   = result.Keywords
+        });
+    }
+    catch (Polly.CircuitBreaker.BrokenCircuitException ex)
+    {
+        // Circuit is OPEN — downstream has failed too many times recently.
+        // No HTTP call was made; Polly rejected it immediately.
+        log.LogWarning(
+            "Resilience test: circuit breaker OPEN — {Message}", ex.Message);
+
+        return Results.Problem(
+            title:      "Circuit Open",
+            detail:     "Enrichment circuit is OPEN. The downstream failure rate " +
+                        "exceeded 50 % in the last 30 s window. Retry after 15 s.",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (Polly.Timeout.TimeoutRejectedException ex)
+    {
+        // Either the 10 s total budget or the 3 s per-attempt timeout fired.
+        log.LogWarning(
+            "Resilience test: timeout — {Message}", ex.Message);
+
+        return Results.Problem(
+            title:      "Timeout",
+            detail:     "Enrichment call exceeded the time budget (10 s total / 3 s per attempt).",
+            statusCode: StatusCodes.Status504GatewayTimeout);
+    }
+    catch (HttpRequestException ex)
+    {
+        // All three retries were exhausted (network error, DNS failure, or 5xx).
+        // The retry log lines ("HTTP retry 1/3 …") already appeared above this point.
+        log.LogError(ex,
+            "Resilience test: all retries exhausted — {Message}", ex.Message);
+
+        return Results.Problem(
+            title:      "Retries Exhausted",
+            detail:     $"All 3 retry attempts failed: {ex.Message}. " +
+                        "Check the retry Warning logs emitted by QuotesApi.HttpResilience.",
+            statusCode: StatusCodes.Status502BadGateway);
+    }
+    // OperationCanceledException (caller cancelled) is intentionally NOT caught —
+    // it propagates naturally; ASP.NET Core returns a 499 / connection-reset.
+});
+// ════════════════════════════════════════════════════════════════════════════
+// END TEMPORARY RESILIENCE TEST ENDPOINT
+// ════════════════════════════════════════════════════════════════════════════
 
 
 if (!app.Environment.IsEnvironment("Testing"))
