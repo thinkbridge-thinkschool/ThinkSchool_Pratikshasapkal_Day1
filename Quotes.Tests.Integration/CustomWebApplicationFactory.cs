@@ -29,6 +29,21 @@ public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>
     {
         builder.UseEnvironment("Testing");
 
+        // Inject the JWT settings used by JwtTestHelper directly into configuration so
+        // tests are not sensitive to content-root resolution of appsettings.Testing.json.
+        // This key must match JwtTestHelper.TestKey, TestIssuer, and TestAudience exactly.
+        builder.ConfigureAppConfiguration(config =>
+        {
+            config.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Jwt:Key"]              = "integration-tests-only-signing-key-not-for-production-use",
+                ["Jwt:Issuer"]           = "QuotesApi",
+                ["Jwt:Audience"]         = "QuotesApi",
+                ["Jwt:ExpiryMinutes"]    = "15",
+                ["Jwt:RefreshExpiryDays"] = "7"
+            });
+        });
+
         builder.ConfigureServices(services =>
         {
             // Remove all AppDbContext registrations (the SQLite-backed production registration
