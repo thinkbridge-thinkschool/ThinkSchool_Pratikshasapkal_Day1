@@ -42,7 +42,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.nuget/packages
-          key: nuget-${{ runner.os }}-${{ hashFiles('day-1/**/*.csproj') }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
           restore-keys: nuget-${{ runner.os }}-
 
       - name: Restore
@@ -74,7 +74,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.nuget/packages
-          key: nuget-${{ runner.os }}-${{ hashFiles('day-1/**/*.csproj') }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
           restore-keys: nuget-${{ runner.os }}-
 
       - name: Restore
@@ -91,6 +91,7 @@ jobs:
           dotnet test Tests.Domain/Tests.Domain.csproj \
             --no-build -c Release \
             --logger "trx;LogFileName=unit.trx" \
+            --logger "console;verbosity=detailed" \
             --collect:"XPlat Code Coverage" \
             --results-directory "${{ github.workspace }}/test-results/unit"
 
@@ -132,7 +133,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.nuget/packages
-          key: nuget-${{ runner.os }}-${{ hashFiles('day-1/**/*.csproj') }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj') }}
           restore-keys: nuget-${{ runner.os }}-
 
       - name: Restore
@@ -147,11 +148,14 @@ jobs:
       - name: Install ReportGenerator
         run: dotnet tool update -g dotnet-reportgenerator-globaltool
 
+      # --logger "console;verbosity=detailed" streams every test name + result directly
+      # to the GitHub Actions log so the mentor can see all 5 required scenarios pass.
       - name: Test
         run: |
           dotnet test Quotes.Tests.Integration/Quotes.Tests.Integration.csproj \
             --no-build -c Release \
             --logger "trx;LogFileName=integration.trx" \
+            --logger "console;verbosity=detailed" \
             --collect:"XPlat Code Coverage" \
             --settings coverlet.runsettings \
             --results-directory "${{ github.workspace }}/test-results/integration" \
@@ -159,6 +163,69 @@ jobs:
             --blame-crash
         env:
           DOCKER_HOST: unix:///var/run/docker.sock
+
+      # Parses the TRX XML and prints an explicit pass/fail table for all five required
+      # auth/authz scenarios. Fails CI if any required test is missing or did not pass.
+      - name: "Verify required auth/authz scenario tests — Day 3 Piece 3"
+        if: always()
+        shell: python3 {0}
+        run: |
+          import xml.etree.ElementTree as ET, sys, os, glob
+
+          ws      = os.environ.get("GITHUB_WORKSPACE", "")
+          pattern = os.path.join(ws, "test-results", "integration", "*.trx")
+          files   = glob.glob(pattern)
+
+          REQUIRED = [
+              "Anonymous_Request_Returns_401",
+              "Authenticated_User_With_Wrong_Policy_Returns_403",
+              "Authenticated_User_With_Valid_Policy_Returns_200",
+              "Expired_Token_Returns_401",
+              "Revoked_Refresh_Token_Chain_Returns_401",
+          ]
+
+          if not files:
+              print(f"ERROR: No TRX file found at: {pattern}")
+              print("       The Test step may have failed before producing output.")
+              sys.exit(1)
+
+          ns    = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
+          found = {}
+
+          for trx in files:
+              tree = ET.parse(trx)
+              for result in tree.getroot().findall(".//t:UnitTestResult", ns):
+                  name    = result.get("testName", "")
+                  outcome = result.get("outcome", "Unknown")
+                  for req in REQUIRED:
+                      if req in name:
+                          found[req] = outcome
+
+          SEP = "=" * 65
+          print()
+          print(SEP)
+          print("  REQUIRED AUTH / AUTHZ SCENARIOS — DAY 3 PIECE 3")
+          print(SEP)
+
+          all_passed = True
+          for req in REQUIRED:
+              outcome = found.get(req, "NOT FOUND IN TEST RESULTS")
+              marker  = "v" if outcome == "Passed" else "X"
+              print(f"  [{marker}] {req}")
+              print(f"       Status : {outcome}")
+              if outcome != "Passed":
+                  all_passed = False
+
+          print(SEP)
+          if all_passed:
+              print("  [v] ALL 5 REQUIRED SCENARIOS PASSED — ready for mentor review")
+          else:
+              print("  [X] ONE OR MORE REQUIRED SCENARIOS FAILED OR ARE MISSING")
+              print("      See the Test step output above for details.")
+          print(SEP)
+          print()
+
+          sys.exit(0 if all_passed else 1)
 
       - name: Generate coverage report
         if: always()
