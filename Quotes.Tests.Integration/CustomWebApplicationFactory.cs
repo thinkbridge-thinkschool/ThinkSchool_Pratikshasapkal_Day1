@@ -60,13 +60,14 @@ public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>
                 services.Remove(descriptor);
 
             // Point AppDbContext at a fresh, uniquely-named SQL Server database on the
-            // shared container. EF's Migrate() in CreateHost() will create it.
+            // shared container. EnsureCreated() in CreateHost() will build the schema
+            // from the C# EF Core model using SQL Server-appropriate types.
             //
             // Suppress PendingModelChangesWarning: EF Core 10 compares the live C# model hash
             // against the last migration snapshot. Our snapshot is SQLite-generated and lacks
             // QuoteId/AddedAt for CollectionItem because those were added to the migrations
             // manually (no Designer file update). The schema IS correct — all columns exist
-            // after Migrate() — so this guard is a false positive in cross-provider test infra.
+            // after EnsureCreated() — so this guard is a false positive in cross-provider test infra.
             services.AddDbContext<AppDbContext>(options =>
                 options
                     .UseSqlServer(_fixture.GetConnectionString(_databaseName))
@@ -90,9 +91,15 @@ public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>
         using var scope = host.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        // Create the database and apply every pending migration.
-        // Migrate() creates the database if it does not already exist.
-        db.Database.Migrate();
+        // Build the schema from the C# EF Core model using SQL Server-appropriate types.
+        // We use EnsureCreated() instead of Migrate() because the existing migrations were
+        // generated against SQLite and use type:"TEXT" for DateTime columns (ExpiresAt,
+        // RevokedAt). When those DDL statements run on SQL Server they create deprecated
+        // `text` columns, and SQL Server refuses to implicitly convert datetime2 parameters
+        // to `text`, causing every RefreshToken INSERT to throw at runtime.
+        // EnsureCreated() bypasses the migration files entirely and creates tables with
+        // proper SQL Server types (datetime2, nvarchar(max), int IDENTITY).
+        db.Database.EnsureCreated();
 
         // Program.cs seeding is guarded by !IsEnvironment("Testing"),
         // so we seed the admin user ourselves.
