@@ -289,14 +289,12 @@ app.MapGet("/api/collections/{id}", async (
 app.MapPost("/api/collections", async (
     string name,
     int ownerId,
-    IClock clock,
     ICollectionRepository repository,
     CancellationToken cancellationToken) =>
 {
     var collection = new Collection(
         name,
-        ownerId,
-        clock);
+        ownerId);
 
     await repository.Add(
         collection,
@@ -310,6 +308,7 @@ app.MapPost("/api/collections", async (
 app.MapPost("/api/collections/{id}/items", async (
     int id,
     int quoteId,
+    IClock clock,
     ICollectionRepository repository,
     CancellationToken cancellationToken) =>
 {
@@ -324,7 +323,7 @@ app.MapPost("/api/collections/{id}/items", async (
 
     try
     {
-        collection.AddItem(quoteId);
+        collection.AddItem(quoteId, clock.UtcNow.UtcDateTime);
     }
     catch (InvalidOperationException ex)
     {

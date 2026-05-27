@@ -1,5 +1,4 @@
 namespace QuotesApi.Models;
-using QuotesApi.Abstractions;
 
 public class Collection
 {
@@ -9,22 +8,18 @@ public class Collection
 
     public int OwnerId { get; private set; }
 
-    private readonly IClock _clock;
-
     public List<CollectionItem> Items { get; private set; } = new();
 
-    private Collection()
-    {
-        _clock = default!;
-    }
+    /// <summary>
+    /// Parameterless constructor required by EF Core for entity materialization.
+    /// Not for application use — call <see cref="Collection(string, int)"/> instead.
+    /// </summary>
+    private Collection() { }
 
     public Collection(
         string name,
-        int ownerId,
-        IClock clock)
+        int ownerId)
     {
-        _clock = clock;
-
         SetName(name);
 
         OwnerId = ownerId;
@@ -47,7 +42,15 @@ public class Collection
         Name = name;
     }
 
-    public void AddItem(int quoteId)
+    /// <summary>
+    /// Adds a quote reference to this collection.
+    /// </summary>
+    /// <param name="quoteId">The ID of the quote to add.</param>
+    /// <param name="addedAt">
+    /// UTC timestamp to record as the item's creation time.
+    /// Callers should pass <c>clock.UtcNow.UtcDateTime</c>.
+    /// </param>
+    public void AddItem(int quoteId, DateTime addedAt)
     {
         if (Items.Count >= 50)
         {
@@ -61,9 +64,7 @@ public class Collection
                 "Duplicate quote is not allowed");
         }
 
-        Items.Add(new CollectionItem(
-            quoteId,
-            _clock.UtcNow.UtcDateTime));
+        Items.Add(new CollectionItem(quoteId, addedAt));
     }
 
     public void RemoveItem(int quoteId)
