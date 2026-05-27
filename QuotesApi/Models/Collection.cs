@@ -85,9 +85,21 @@ public class Collection
 public class CollectionItem
 {
     public int Id { get; private set; }
-    public int QuoteId { get; }
 
-    public DateTime AddedAt { get; }
+    /// <summary>
+    /// private set — required for EF Core to populate this column when
+    /// materializing the entity via the parameterless constructor.
+    /// { get; } (readonly auto-property) has an initonly backing field that
+    /// EF Core cannot write to after construction, leaving QuoteId = 0 and
+    /// breaking duplicate detection and item-removal lookups.
+    /// </summary>
+    public int QuoteId { get; private set; }
+
+    /// <summary>
+    /// private set — same reason as QuoteId: EF Core needs a writable path
+    /// to restore this value from the database during materialization.
+    /// </summary>
+    public DateTime AddedAt { get; private set; }
 
     public CollectionItem(
         int quoteId,
@@ -98,6 +110,10 @@ public class CollectionItem
         AddedAt = addedAt;
     }
 
+    /// <summary>
+    /// Parameterless constructor used by EF Core for entity materialization.
+    /// EF Core calls this first, then sets QuoteId and AddedAt via private set.
+    /// </summary>
     private CollectionItem()
     {
     }
