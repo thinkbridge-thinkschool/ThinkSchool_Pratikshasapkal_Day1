@@ -14,6 +14,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Diagnostics;
 
 
 var builder = WebApplication.CreateBuilder(args);
@@ -112,7 +113,9 @@ builder.Services.AddScoped<IAuthorizationHandler, DeleteOwnQuoteHandler>();
 
 builder.Services.AddDbContext<AppDbContext>((serviceProvider, options) =>
 {
-    options.UseSqlite("Data Source=quotes.db");
+    options.UseSqlServer(
+        "Server=tcp:pratiksha-sql-server-01.database.windows.net,1433;Initial Catalog=quotes-sql-db;Persist Security Info=False;User ID=pratiksha-quotesdb;Password=@Database123;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
+    );
 });
 
 builder.Services.AddScoped<
@@ -467,16 +470,69 @@ if (!app.Environment.IsEnvironment("Testing"))
     var db = scope.ServiceProvider
         .GetRequiredService<AppDbContext>();
 
-    if (!db.Users.Any())
-    {
-        db.Users.Add(new User(
-            "admin@example.com",
-            "password123"));
+    // if (!db.Users.Any())
+    // {
+    //     db.Users.Add(new User(
+    //         "admin@example.com",
+    //         "password123"));
 
-        db.SaveChanges();
-    }
+    //     db.SaveChanges();
+    // }
 }
 
 
+using (var tempScope = builder.Services.BuildServiceProvider().CreateScope())
+{
+    var context = tempScope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+    // ---------------- TRACKED QUERY ----------------
+
+    GC.Collect();
+    GC.WaitForPendingFinalizers();
+    GC.Collect();
+
+    long trackedBefore = GC.GetAllocatedBytesForCurrentThread();
+
+    var trackedWatch = Stopwatch.StartNew();
+
+    var trackedQuotes = await context.Quotes
+        .OrderBy(q => q.Id)
+        .Take(10000)
+        .ToListAsync();
+
+    trackedWatch.Stop();
+
+    long trackedAfter = GC.GetAllocatedBytesForCurrentThread();
+
+    Console.WriteLine("==== TRACKED QUERY ====");
+    Console.WriteLine($"Rows: {trackedQuotes.Count}");
+    Console.WriteLine($"Timclse: {trackedWatch.ElapsedMilliseconds} ms");
+    Console.WriteLine($"Allocated: {trackedAfter - trackedBefore} bytes");
+
+    // ---------------- AS NO TRACKING QUERY ----------------
+
+    GC.Collect();
+    GC.WaitForPendingFinalizers();
+    GC.Collect();
+
+    long noTrackBefore = GC.GetAllocatedBytesForCurrentThread();
+
+    var noTrackWatch = Stopwatch.StartNew();
+
+    var noTrackQuotes = await context.Quotes
+        .AsNoTracking()
+        .OrderBy(q => q.Id)
+        .Take(10000)
+        .ToListAsync();
+
+    noTrackWatch.Stop();
+
+    long noTrackAfter = GC.GetAllocatedBytesForCurrentThread();
+
+    Console.WriteLine("==== AS NO TRACKING QUERY ====");
+    Console.WriteLine($"Rows: {noTrackQuotes.Count}");
+    Console.WriteLine($"Time: {noTrackWatch.ElapsedMilliseconds} ms");
+    Console.WriteLine($"Allocated: {noTrackAfter - noTrackBefore} bytes");
+}
 
 app.Run();
