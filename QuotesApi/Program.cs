@@ -116,6 +116,9 @@ builder.Services.AddDbContext<AppDbContext>((serviceProvider, options) =>
     options.UseSqlServer(
         "Server=tcp:pratiksha-sql-server-01.database.windows.net,1433;Initial Catalog=quotes-sql-db;Persist Security Info=False;User ID=pratiksha-quotesdb;Password=@Database123;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
     );
+
+    options.EnableSensitiveDataLogging();
+    options.LogTo(Console.WriteLine, LogLevel.Information);
 });
 
 builder.Services.AddScoped<
@@ -480,7 +483,6 @@ if (!app.Environment.IsEnvironment("Testing"))
     // }
 }
 
-
 using (var tempScope = builder.Services.BuildServiceProvider().CreateScope())
 {
     var context = tempScope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -506,8 +508,10 @@ using (var tempScope = builder.Services.BuildServiceProvider().CreateScope())
 
     Console.WriteLine("==== TRACKED QUERY ====");
     Console.WriteLine($"Rows: {trackedQuotes.Count}");
-    Console.WriteLine($"Timclse: {trackedWatch.ElapsedMilliseconds} ms");
+    Console.WriteLine($"Time: {trackedWatch.ElapsedMilliseconds} ms");
     Console.WriteLine($"Allocated: {trackedAfter - trackedBefore} bytes");
+
+
 
     // ---------------- AS NO TRACKING QUERY ----------------
 
@@ -532,7 +536,54 @@ using (var tempScope = builder.Services.BuildServiceProvider().CreateScope())
     Console.WriteLine("==== AS NO TRACKING QUERY ====");
     Console.WriteLine($"Rows: {noTrackQuotes.Count}");
     Console.WriteLine($"Time: {noTrackWatch.ElapsedMilliseconds} ms");
-    Console.WriteLine($"Allocated: {noTrackAfter - noTrackBefore} bytes");
+    Console.WriteLine($"Allocated: {noTrackAfter - noTrackBefore}");
+
+
+
+    // ---------------- FULL ENTITY QUERY ----------------
+
+    Console.WriteLine("==== FULL ENTITY QUERY ====");
+
+    var fullQuotes = await context.Quotes
+        .OrderBy(q => q.Id)
+        .Take(5)
+        .ToListAsync();
+
+
+
+    // ---------------- PROJECTED DTO QUERY ----------------
+
+    Console.WriteLine("==== PROJECTED DTO QUERY ====");
+
+    var projectedQuotes = await context.Quotes
+        .Select(q => new
+        {
+            q.Id,
+            q.Author
+        })
+        .OrderBy(q => q.Id)
+        .Take(5)
+        .ToListAsync();
+
+
+
+    // ---------------- CLIENT SIDE EVALUATION ----------------
+
+    Console.WriteLine("==== CLIENT SIDE EVALUATION ====");
+
+    bool IsLongAuthor(string author)
+    {
+        return author.Length > 10;
+    }
+
+    var clientEval = context.Quotes
+        .AsEnumerable()
+        .Where(q => IsLongAuthor(q.Author))
+        .Take(5)
+        .ToList();
+
+    Console.WriteLine($"Client-side rows: {clientEval.Count}");
 }
+
 
 app.Run();
