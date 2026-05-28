@@ -1,183 +1,242 @@
-# Day 9 — Transaction Isolation Levels & Read Anomalies
+# Day 9 — Isolation Levels & Read Anomalies
 
-**Database:** SQL Server (SSMS)  
-**Table:** `Quotes` (`Id`, `Author`, `QuoteText`, `CreatedAt`)  
-**Method:** Two concurrent query tabs (Session 1 and Session 2) to reproduce each anomaly.
+## Database
 
----
+SQL Server Management Studio (SSMS)
 
-## Background
-
-SQL Server provides four standard isolation levels that control how transactions see data modified by other concurrent transactions:
-
-| Isolation Level      | Description                                                                    |
-|----------------------|--------------------------------------------------------------------------------|
-| `READ UNCOMMITTED`   | Reads dirty (uncommitted) data. Lowest isolation, highest concurrency.         |
-| `READ COMMITTED`     | Default. Only reads committed data. Prevents dirty reads.                      |
-| `REPEATABLE READ`    | Holds read locks until transaction ends. Prevents dirty + non-repeatable reads.|
-| `SERIALIZABLE`       | Fully serializes transactions. Prevents all three read anomalies.              |
-
-Higher isolation levels improve data consistency but reduce concurrency because locks are held longer and block other transactions.
-
----
-
-## Anomaly 1 — Dirty Read
-
-### What It Is
-
-A dirty read occurs when Transaction A reads data that Transaction B has written but **not yet committed**. If B later rolls back, A has read data that never actually existed.
-
-### Session 1 (Writer — begins but does not commit)
+## Table Used
 
 ```sql
-SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
-
-BEGIN TRANSACTION;
-
-INSERT INTO Quotes (Author, QuoteText, CreatedAt)
-VALUES ('Test Author', 'This is a dirty read test.', GETDATE());
-
--- Do NOT commit yet. Switch to Session 2 now.
--- ROLLBACK TRANSACTION;
+Quotes (
+    Id,
+    Author,
+    QuoteText,
+    CreatedAt
+)
 ```
 
-### Session 2 (Reader — uses READ UNCOMMITTED to see dirty data)
+## Objective
+
+Reproduce:
+
+* Dirty Read
+* Non-Repeatable Read
+* Phantom Read
+
+using two concurrent SQL sessions and identify the lowest isolation level that prevents each anomaly.
+
+---
+
+# Dirty Read
+
+## What Happened
+
+Session 2 was able to read uncommitted data modified by Session 1.
+
+---
+
+## Session 1
+
+```sql
+BEGIN TRANSACTION;
+
+UPDATE Quotes
+SET QuoteText = 'Dirty Read Example'
+WHERE Id = 1;
+```
+
+Transaction intentionally left uncommitted.
+
+---
+
+## Session 2
 
 ```sql
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
 
-SELECT * FROM Quotes;
--- Returns the row inserted by Session 1 even though it is not committed.
-```
-
-### Observed Behavior
-
-With `READ UNCOMMITTED`, Session 2 sees the row inserted by Session 1 before the commit. When Session 1 rolls back, that row disappears — Session 2 read data that never truly existed.
-
-**Prevented by:** `READ COMMITTED` and above.
-
----
-
-## Anomaly 2 — Non-Repeatable Read
-
-### What It Is
-
-A non-repeatable read occurs when Transaction A reads the same row twice and gets **different values** because Transaction B updated and committed that row between the two reads.
-
-### Session 1 (Reader — reads the same row twice)
-
-```sql
-SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
-
-BEGIN TRANSACTION;
-
--- First read
-SELECT * FROM Quotes WHERE Id = 1;
-
--- Switch to Session 2 and let it run, then come back here.
-
--- Second read (same row, different result)
-SELECT * FROM Quotes WHERE Id = 1;
-
-COMMIT;
-```
-
-### Session 2 (Writer — updates the row between Session 1's two reads)
-
-```sql
-SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
-
-BEGIN TRANSACTION;
-
-UPDATE Quotes
-SET Author = 'Updated Author'
+SELECT *
+FROM Quotes
 WHERE Id = 1;
-
-COMMIT;
 ```
 
-### Observed Behavior
+Observed result:
 
-Session 1's first `SELECT` returns `Author = 'Original Author'`. After Session 2 commits its `UPDATE`, Session 1's second `SELECT` on the same row returns `Author = 'Updated Author'`. The same query inside the same transaction produced two different results.
+```text
+Dirty Read Example
+```
 
-**Prevented by:** `REPEATABLE READ` and above.
+even though Session 1 had not committed yet.
 
 ---
 
-## Anomaly 3 — Phantom Read
+## Rollback
 
-### What It Is
+```sql
+ROLLBACK;
+```
 
-A phantom read occurs when Transaction A runs the same range query twice and the **set of rows changes** between the two reads because Transaction B inserted or deleted rows that fall in the range.
+After rollback, the original quote value returned.
 
-### Session 1 (Reader — runs range query twice)
+---
+
+## Observation
+
+`READ UNCOMMITTED` allows dirty reads because it permits reading temporary uncommitted changes from other transactions.
+
+---
+
+# Non-Repeatable Read
+
+## What Happened
+
+The same query inside the same transaction returned different values because another session updated the row between reads.
+
+---
+
+## Session 1
+
+```sql
+SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
+BEGIN TRANSACTION;
+
+SELECT QuoteText
+FROM Quotes
+WHERE Id = 2;
+```
+
+First result:
+
+```text
+Imagination is more important than knowledge.
+```
+
+---
+
+## Session 2
+
+```sql
+UPDATE Quotes
+SET QuoteText = 'Updated Between Reads'
+WHERE Id = 2;
+```
+
+---
+
+## Session 1 Again
+
+```sql
+SELECT QuoteText
+FROM Quotes
+WHERE Id = 2;
+```
+
+Second result:
+
+```text
+Updated Between Reads
+```
+
+---
+
+## Observation
+
+The same row returned different values inside the same transaction because another transaction committed an update in between the reads.
+
+---
+
+# Phantom Read
+
+## What Happened
+
+A new row appeared inside the same transaction because another session inserted matching data.
+
+---
+
+## Session 1
 
 ```sql
 SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
 
 BEGIN TRANSACTION;
 
--- First range read
-SELECT * FROM Quotes WHERE Author = 'Marcus Aurelius';
-
--- Switch to Session 2 and let it run, then come back here.
-
--- Second range read (phantom row appears)
-SELECT * FROM Quotes WHERE Author = 'Marcus Aurelius';
-
-COMMIT;
+SELECT *
+FROM Quotes
+WHERE Author = 'Albert Einstein';
 ```
 
-### Session 2 (Writer — inserts a new row in the range)
+Initial result:
+
+```text
+2502 rows
+```
+
+---
+
+## Session 2
 
 ```sql
-SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
-
-BEGIN TRANSACTION;
-
-INSERT INTO Quotes (Author, QuoteText, CreatedAt)
-VALUES ('Marcus Aurelius', 'New phantom quote.', GETDATE());
-
-COMMIT;
+INSERT INTO Quotes (
+    Id,
+    Author,
+    QuoteText,
+    CreatedAt
+)
+VALUES (
+    999999,
+    'Albert Einstein',
+    'Phantom Read Example',
+    GETDATE()
+);
 ```
 
-### Observed Behavior
+---
 
-Session 1's first `SELECT` returns, say, 3 rows for `Author = 'Marcus Aurelius'`. After Session 2 inserts a new row for the same author, Session 1's second `SELECT` returns 4 rows. A new "phantom" row appeared inside an active transaction.
+## Session 1 Again
 
-Note: `REPEATABLE READ` prevents updates to existing rows but still allows new inserts — phantom reads are only fully prevented by `SERIALIZABLE`, which locks the range itself.
+```sql
+SELECT *
+FROM Quotes
+WHERE Author = 'Albert Einstein';
+```
 
-**Prevented by:** `SERIALIZABLE`.
+Second result:
+
+```text
+2503 rows
+```
 
 ---
 
-## Isolation Level Reference Table
+## Observation
 
-| Anomaly               | Lowest Level That Prevents It |
-|-----------------------|-------------------------------|
-| Dirty Read            | `READ COMMITTED`              |
-| Non-Repeatable Read   | `REPEATABLE READ`             |
-| Phantom Read          | `SERIALIZABLE`                |
+A new matching row appeared during the same transaction. `REPEATABLE READ` protects existing rows but does not prevent new matching rows from being inserted.
 
 ---
 
-## What I Learned
+# Isolation Level Table
 
-- `READ UNCOMMITTED` allows all three anomalies and should almost never be used in production. It is occasionally used for quick reporting queries where approximate data is acceptable.
-- `READ COMMITTED` (SQL Server's default) is a safe baseline — it prevents dirty reads without significantly blocking other transactions.
-- `REPEATABLE READ` adds row-level read locks that persist for the transaction duration, preventing another session from updating rows you have already read. This increases blocking.
-- `SERIALIZABLE` prevents phantom reads by locking the entire key range, effectively serializing access to any rows that match your query predicate. It offers maximum consistency at the cost of the lowest concurrency.
-- Each higher isolation level trades concurrency for consistency. In high-throughput systems, lock contention under `SERIALIZABLE` can become a bottleneck, which is why many systems use optimistic concurrency or snapshot isolation (`READ COMMITTED SNAPSHOT`) instead.
+| Anomaly             | Lowest Isolation Level Preventing It |
+| ------------------- | ------------------------------------ |
+| Dirty Read          | READ COMMITTED                       |
+| Non-Repeatable Read | REPEATABLE READ                      |
+| Phantom Read        | SERIALIZABLE                         |
 
 ---
 
-## What Would Break This
+# What I Learned
 
-| Scenario                                                                  | Effect                                                                         |
-|---------------------------------------------------------------------------|--------------------------------------------------------------------------------|
-| Running Session 2 too fast before Session 1 reaches its second read       | Anomaly may not be visible — timing is critical for reproduction.              |
-| Forgetting `BEGIN TRANSACTION` in Session 1                               | Single statements auto-commit; no window exists for Session 2 to interleave.   |
-| Using `SNAPSHOT` isolation level                                          | SQL Server uses row versioning instead of locks — anomalies behave differently. |
-| `AUTOCOMMIT` mode on                                                      | Transactions close immediately, making multi-read anomalies impossible to see.  |
-| Connection pooling or ORM abstracting isolation level                     | Application may silently override your `SET TRANSACTION ISOLATION LEVEL`.      |
-| Uncommitted Session 1 transaction left open                               | Blocks other writes; can cause lock timeouts in shared environments.           |
+* `READ UNCOMMITTED` allows unsafe reads of temporary transaction data.
+* `READ COMMITTED` prevents dirty reads but still allows data changes between reads.
+* `REPEATABLE READ` prevents updates to previously read rows but still allows phantom rows.
+* `SERIALIZABLE` provides the highest consistency by preventing all three anomalies.
+* Higher isolation levels improve consistency but reduce concurrency and increase locking.
+
+---
+
+# What Would Break This
+
+* Running queries in the wrong order would fail to reproduce anomalies.
+* Forgetting `BEGIN TRANSACTION` would auto-commit changes immediately.
+* Using snapshot isolation would change transaction behavior.
+* Long-running serializable transactions could increase blocking and deadlocks.
