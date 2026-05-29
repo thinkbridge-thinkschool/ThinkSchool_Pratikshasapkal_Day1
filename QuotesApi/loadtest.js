@@ -7,5 +7,5 @@ export const options = {
 };
 
 export default function () {
-    http.get('http://localhost:5032/slow-authors-with-quotes');
+http.get('http://localhost:5032/fast-authors-with-quotes-projection');
 }

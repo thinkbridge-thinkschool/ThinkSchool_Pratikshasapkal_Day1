@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using QuotesApi.Data;
 
@@ -11,9 +12,11 @@ using QuotesApi.Data;
 namespace QuotesApi.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260529103216_AddCoveringIndex")]
+    partial class AddCoveringIndex
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -87,9 +90,7 @@ namespace QuotesApi.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("AuthorId")
-                        .HasDatabaseName("IX_Quotes_AuthorId_Covering")
-                        .HasAnnotation("SqlServer:Include", new[] { "IsDeleted", "Text" });
+                    b.HasIndex("AuthorId");
 
                     b.ToTable("Quotes");
                 });

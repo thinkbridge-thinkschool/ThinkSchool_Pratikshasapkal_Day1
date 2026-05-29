@@ -15,6 +15,7 @@ using System.Text;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Diagnostics;
+using Microsoft.AspNetCore.ResponseCompression;
 
 
 var builder = WebApplication.CreateBuilder(args);
@@ -128,6 +129,12 @@ builder.Services.AddScoped<
 builder.Services.AddTransient<GuidGenerator>();
 builder.Services.AddSingleton<IClock, SystemClock>();
 builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddResponseCompression(opts =>
+{
+    opts.EnableForHttps = true;
+    opts.Providers.Add<BrotliCompressionProvider>();
+    opts.Providers.Add<GzipCompressionProvider>();
+});
 
 
 string GenerateRefreshToken()
@@ -184,6 +191,7 @@ async Task RevokeFamily(AppDbContext db, string familyId, CancellationToken ct)
 
 var app = builder.Build();
 
+app.UseResponseCompression();
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -207,7 +215,6 @@ app.MapGet("/authors-with-quotes", async (AppDbContext db, CancellationToken ct)
 
     return Results.Ok(authors);
 });
-
 app.MapGet("/slow-authors-with-quotes", async (AppDbContext db) =>
 {
     var authors = await db.Authors.ToListAsync();
@@ -226,6 +233,33 @@ app.MapGet("/slow-authors-with-quotes", async (AppDbContext db) =>
             Quotes = quotes
         });
     }
+
+    return Results.Ok(result);
+});
+
+
+// Optimized endpoint: single LEFT JOIN query, covering index (no key lookups),
+// only live quotes, only columns needed by the caller.
+//
+// Generated SQL (verify with LogTo or SSMS):
+//   SELECT a.Id, a.Name, q.Id, q.Text
+//   FROM Authors AS a
+//   LEFT JOIN Quotes AS q ON a.Id = q.AuthorId AND q.IsDeleted = 0
+//   ORDER BY a.Id
+//
+// Execution plan should show: Index Seek on IX_Quotes_AuthorId_Covering — no Key Lookup.
+app.MapGet("/fast-authors-with-quotes-projection",
+    async (AppDbContext db) =>
+{
+    var result = await db.Authors
+        .AsNoTracking()
+        .Select(a => new
+        {
+            a.Id,
+            a.Name,
+            QuoteCount = a.Quotes.Count
+        })
+        .ToListAsync();
 
     return Results.Ok(result);
 });

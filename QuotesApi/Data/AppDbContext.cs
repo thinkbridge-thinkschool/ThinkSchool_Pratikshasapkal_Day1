@@ -46,5 +46,14 @@ public class AppDbContext : DbContext
             .HasForeignKey("AuthorId")
             .IsRequired(false)
             .OnDelete(DeleteBehavior.SetNull);
+
+        // Covering index: AuthorId (seek key) + Text, IsDeleted (INCLUDE columns).
+        // Eliminates the Key Lookup that IX_Quotes_AuthorId alone causes — the query
+        // SELECT AuthorId, Id, Text WHERE IsDeleted=0 is now satisfied entirely from
+        // the index leaf pages, no round-trip to the clustered index per quote row.
+        modelBuilder.Entity<Quote>()
+            .HasIndex("AuthorId")
+            .HasDatabaseName("IX_Quotes_AuthorId_Covering")
+            .IncludeProperties(q => new { q.Text, q.IsDeleted });
     }
 }
