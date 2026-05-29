@@ -16,6 +16,7 @@ public class AppDbContext : DbContext
 
     public DbSet<User> Users => Set<User>();
     public DbSet<Quote> Quotes => Set<Quote>();
+    public DbSet<Author> Authors => Set<Author>();
 
     public DbSet<Collection> Collections => Set<Collection>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
@@ -35,5 +36,15 @@ public class AppDbContext : DbContext
                     "CollectionId",
                     "Id");
             });
+
+        // Relationship: Author → Quotes via shadow FK "AuthorId" on Quotes table.
+        // Deliberately NO HasIndex("AuthorId") to force a table scan and demonstrate
+        // the missing-index performance problem.
+        modelBuilder.Entity<Author>()
+            .HasMany(a => a.Quotes)
+            .WithOne()
+            .HasForeignKey("AuthorId")
+            .IsRequired(false)
+            .OnDelete(DeleteBehavior.SetNull);
     }
 }

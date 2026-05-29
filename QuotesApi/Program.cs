@@ -193,6 +193,76 @@ app.MapGet("/", () =>
     return "Quotes API Running";
 });
 
+// Deliberately slow endpoint: N+1 query pattern + missing index on AuthorId → table scan.
+// Uses AsSplitQuery() so EF Core emits separate SELECT statements:
+//   Query 1: SELECT * FROM Authors
+//   Query 2: SELECT Quotes.* FROM Quotes WHERE AuthorId IN (...)  ← table scan (no index)
+app.MapGet("/authors-with-quotes", async (AppDbContext db, CancellationToken ct) =>
+{
+    var authors = await db.Authors
+        .Include(a => a.Quotes.Where(q => !q.IsDeleted))
+        .AsSplitQuery()
+        .AsNoTracking()
+        .ToListAsync(ct);
+
+    return Results.Ok(authors);
+});
+
+app.MapGet("/slow-authors-with-quotes", async (AppDbContext db) =>
+{
+    var authors = await db.Authors.ToListAsync();
+
+    var result = new List<object>();
+
+    foreach (var author in authors)
+    {
+        var quotes = await db.Quotes
+            .Where(q => EF.Property<int>(q, "AuthorId") == author.Id)
+            .ToListAsync();
+
+        result.Add(new
+        {
+            Author = author.Name,
+            Quotes = quotes
+        });
+    }
+
+    return Results.Ok(result);
+});
+
+// Seed endpoint — populates Authors table and creates 500 demo quotes assigned to authors.
+// Uses raw SQL inserts to bypass EF Core's change-tracker complexity with shadow FK properties.
+// Call once before load-testing: POST /seed-demo-data
+app.MapPost("/seed-demo-data", async (AppDbContext db, CancellationToken ct) =>
+{
+    if (await db.Authors.AnyAsync(ct))
+        return Results.Ok(new { message = "Already seeded", authorCount = await db.Authors.CountAsync(ct) });
+
+    var names = new[]
+    {
+        "Marcus Aurelius", "Seneca", "Epictetus", "Friedrich Nietzsche", "Albert Camus",
+        "Fyodor Dostoevsky", "Leo Tolstoy", "Simone de Beauvoir", "Bertrand Russell", "William James"
+    };
+
+    var authors = names.Select(n => new Author(n)).ToList();
+    db.Authors.AddRange(authors);
+    await db.SaveChangesAsync(ct);
+
+    var authorIds = await db.Authors.Select(a => new { a.Id, a.Name }).ToListAsync(ct);
+    var rng = new Random(42);
+
+    for (int i = 0; i < 500; i++)
+    {
+        var author = authorIds[rng.Next(authorIds.Count)];
+        var text = $"Demo quote #{i + 1}: {Guid.NewGuid()}";
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"INSERT INTO Quotes (Author, Text, IsDeleted, CreatedByEmail, AuthorId) VALUES ({author.Name}, {text}, 0, 'seed@demo.com', {author.Id})",
+            ct);
+    }
+
+    return Results.Ok(new { authors = names.Length, quotes = 500 });
+});
+
 
 
 // Create a new quote

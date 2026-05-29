@@ -29,3 +29,4 @@ SET QuoteText = 'Session 1 Row 2'
 WHERE Id = 2;
 
 COMMIT;
+
