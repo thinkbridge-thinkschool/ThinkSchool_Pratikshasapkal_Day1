@@ -16,6 +16,8 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Diagnostics;
 using Microsoft.AspNetCore.ResponseCompression;
+using Dapper;
+using Microsoft.Data.SqlClient;
 
 
 var builder = WebApplication.CreateBuilder(args);
@@ -264,6 +266,8 @@ app.MapGet("/fast-authors-with-quotes-projection",
     return Results.Ok(result);
 });
 
+
+
 // Seed endpoint — populates Authors table and creates 500 demo quotes assigned to authors.
 // Uses raw SQL inserts to bypass EF Core's change-tracker complexity with shadow FK properties.
 // Call once before load-testing: POST /seed-demo-data
@@ -346,6 +350,61 @@ app.MapGet("/api/quotes", async (
 
     return Results.Ok(quotes);
 }).RequireAuthorization();
+
+app.MapGet("/api/quotes-dapper", async () =>
+{
+    using var connection = new SqlConnection(
+        "Server=tcp:pratiksha-sql-server-01.database.windows.net,1433;Initial Catalog=quotes-sql-db;Persist Security Info=False;User ID=pratiksha-quotesdb;Password=@Database123;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
+    );
+
+    const string sql = @"
+    SELECT TOP 10 Id, Author, Text
+    FROM Quotes
+    WHERE IsDeleted = 0
+    ORDER BY Id";
+
+    var quotes = await connection.QueryAsync<QuoteListItemDto>(sql);
+
+    return Results.Ok(quotes);
+}).RequireAuthorization();
+
+
+
+app.MapGet("/ef-authors-with-quotecount", async (AppDbContext db) =>
+{
+    var result = await db.Authors
+        .AsNoTracking()
+        .Select(a => new AuthorWithQuoteCountDto
+        {
+            Id = a.Id,
+            Name = a.Name,
+            QuoteCount = a.Quotes.Count
+        })
+        .ToListAsync();
+
+    return Results.Ok(result);
+});
+
+app.MapGet("/dapper-authors-with-quotecount", async () =>
+{
+    using var connection = new SqlConnection(
+        "Server=tcp:pratiksha-sql-server-01.database.windows.net,1433;Initial Catalog=quotes-sql-db;Persist Security Info=False;User ID=pratiksha-quotesdb;Password=@Database123;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
+    );
+
+    const string sql = @"
+        SELECT
+            a.Id,
+            a.Name,
+            COUNT(q.Id) AS QuoteCount
+        FROM Authors a
+        LEFT JOIN Quotes q ON q.AuthorId = a.Id
+        GROUP BY a.Id, a.Name
+        ORDER BY a.Id";
+
+    var result = await connection.QueryAsync<AuthorWithQuoteCountDto>(sql);
+
+    return Results.Ok(result);
+});
 
 
 app.MapGet("/api/quotes/{id}", async (
