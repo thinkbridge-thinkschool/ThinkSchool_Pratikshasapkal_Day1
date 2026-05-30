@@ -328,12 +328,21 @@ app.MapGet("/api/quotes", async (
     int page = 1,
     int size = 10) =>
 {
-    var quotes = await db.Quotes
-        .Where(q => !q.IsDeleted)
-        .OrderBy(q => q.Id)
-        .Skip((page - 1) * size)
-        .Take(size)
-        .ToListAsync(cancellationToken);
+        var quotes = await db.Quotes
+            .AsNoTracking()
+            .Where(q => !q.IsDeleted)
+            .OrderBy(q => q.Id)
+            .Skip((page - 1) * size)
+            .Take(size)
+            //Query//
+            .Select(q => new QuoteListItemDto
+                {
+                    Id = q.Id,
+                    Author = q.Author,
+                    Text = q.Text
+                })
+            //Query//
+            .ToListAsync(cancellationToken);
 
     return Results.Ok(quotes);
 }).RequireAuthorization();
@@ -345,7 +354,15 @@ app.MapGet("/api/quotes/{id}", async (
     CancellationToken cancellationToken) =>
 {
     var quote = await db.Quotes
-        .FirstOrDefaultAsync(q => q.Id == id && !q.IsDeleted, cancellationToken);
+    .AsNoTracking()
+    .Where(q => q.Id == id && !q.IsDeleted)
+    .Select(q => new QuoteListItemDto
+    {
+        Id = q.Id,
+        Author = q.Author,
+        Text = q.Text
+    })
+    .FirstOrDefaultAsync(cancellationToken);
 
     if (quote is null)
         return Results.NotFound();
@@ -577,14 +594,14 @@ if (!app.Environment.IsEnvironment("Testing"))
     var db = scope.ServiceProvider
         .GetRequiredService<AppDbContext>();
 
-    // if (!db.Users.Any())
-    // {
-    //     db.Users.Add(new User(
-    //         "admin@example.com",
-    //         "password123"));
+    if (!db.Users.Any())
+    {
+        db.Users.Add(new User(
+            "admin@example.com",
+            "password123"));
 
-    //     db.SaveChanges();
-    // }
+        db.SaveChanges();
+    }
 }
 
 using (var tempScope = builder.Services.BuildServiceProvider().CreateScope())
