@@ -1,4 +1,4 @@
-SQL emitted by the slow endpoint :
+SQL emitted by the slow endpoint (N+1 — one roundtrip per author):
 
 info: Microsoft.EntityFrameworkCore.Database.Command[20101]
       Executed DbCommand (5ms) [Parameters=[], CommandType='Text', CommandTimeout='30']
@@ -10,6 +10,22 @@ info: 29-05-2026 11:05:35.512 RelationalEventId.CommandExecuted[20101] (Microsof
       SELECT [q].[Id], [q].[Author], [q].[AuthorId], [q].[CreatedByEmail], [q].[IsDeleted], [q].[Text]
       FROM [Quotes] AS [q]
       WHERE [q].[AuthorId] = @author_Id
+
+-- ^ This second query fired once per author. With 10 authors = 11 total roundtrips per HTTP request.
+
+
+SQL emitted by the fast endpoint (single statement — one roundtrip total):
+
+SELECT [a].[Id], [a].[Name], (
+    SELECT COUNT(*)
+    FROM [Quotes] AS [q]
+    WHERE [a].[Id] = [q].[AuthorId]
+) AS [QuoteCount]
+FROM [Authors] AS [a]
+
+-- EF Core translates .Select(a => new { QuoteCount = a.Quotes.Count }) as a correlated subquery.
+-- SQL Server satisfies each per-author COUNT via an Index Seek on IX_Quotes_AuthorId_Covering —
+-- no Key Lookup, no full table scan, no extra application roundtrips.
 
 
 
@@ -38,32 +54,39 @@ P(90)-P(95) | Slow api / Before-Fast Api :
 
 
 
-P(90)-P(95) | After-Fast Api : 
+After-Fast Api (covering index + single SQL statement):
 
 
-  █ TOTAL RESULTS 
+  █ TOTAL RESULTS
 
     HTTP
-    http_req_duration..............: avg=20.95ms min=4.7ms med=13ms    max=1.17s p(90)=27.1ms  p(95)=40.54ms p(99)=221.34ms
-      { expected_response:true }...: avg=20.95ms min=4.7ms med=13ms    max=1.17s p(90)=27.1ms  p(95)=40.54ms p(99)=221.34ms
-    http_req_failed................: 0.00%  0 out of 28422
-    http_reqs......................: 28422  946.773148/s
+    http_req_duration..............: avg=20.67ms min=4.13ms med=14.43ms max=1.98s p(90)=33.7ms  p(95)=46.6ms  p(99)=97.28ms
+      { expected_response:true }...: avg=20.67ms min=4.13ms med=14.43ms max=1.98s p(90)=33.7ms  p(95)=46.6ms  p(99)=97.28ms
+    http_req_failed................: 0.00%  0 out of 28785
+    http_reqs......................: 28785  959.280571/s
 
     EXECUTION
-    iteration_duration.............: avg=21.08ms min=4.7ms med=13.11ms max=1.17s p(90)=27.26ms p(95)=40.67ms p(99)=221.34ms
-    iterations.....................: 28422  946.773148/s
+    iteration_duration.............: avg=20.81ms min=4.4ms  med=14.51ms max=2.04s p(90)=33.85ms p(95)=46.85ms p(99)=97.28ms
+    iterations.....................: 28785  959.280571/s
     vus............................: 20     min=20         max=20
     vus_max........................: 20     min=20         max=20
 
     NETWORK
-    data_received..................: 18 MB  614 kB/s
-    data_sent......................: 3.0 MB 99 kB/s
+    data_received..................: 19 MB  622 kB/s
+    data_sent......................: 3.0 MB 101 kB/s
 
 
-
-
-running (0m30.0s), 00/20 VUs, 28422 complete and 0 interrupted iterations
+running (0m30.0s), 00/20 VUs, 28785 complete and 0 interrupted iterations
 default ✓ [======================================] 20 VUs  30s
+
+
+Improvement summary:
+  p99:        3,350 ms  →  97.28 ms   (34.4× faster)
+  p95:        2,340 ms  →  46.6 ms    (50.2× faster)
+  p90:        2,180 ms  →  33.7 ms    (64.7× faster)
+  throughput:   14.1 /s → 959.3 /s   (68× more requests/s)
+  requests:      435    →  28,785     (same 30s window, 20 VUs)
+  errors:       0.00%   →   0.00%
 
 
 Changes Made
@@ -82,11 +105,18 @@ foreach (var author in authors)
 
 This resulted in multiple database round-trips and poor performance under load.
 
-2. Added an Index on AuthorId
-CREATE INDEX IX_Quotes_AuthorId
-ON Quotes(AuthorId);
+2. Added a Covering Index on AuthorId
 
-This allowed SQL Server to seek directly to matching rows instead of scanning the entire table.
+CREATE INDEX IX_Quotes_AuthorId_Covering
+ON Quotes(AuthorId)
+INCLUDE (IsDeleted, Text);
+
+The plain IX_Quotes_AuthorId would enable an Index Seek but still require a Key Lookup per matching
+row to retrieve Text and IsDeleted from the clustered index. Adding those columns via INCLUDE embeds
+them in the index leaf pages — the correlated subquery COUNT can be satisfied entirely from index
+pages with zero Key Lookups.
+Execution plan after: Index Seek on IX_Quotes_AuthorId_Covering, no Key Lookup.
+Logical reads: Quotes = 39, Authors = 3.
 
 3. Switched to a Projection-Based Query
 
