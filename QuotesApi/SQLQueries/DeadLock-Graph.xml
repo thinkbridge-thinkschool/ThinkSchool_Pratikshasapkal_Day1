@@ -1,0 +1,386 @@
+<RingBufferTarget truncated="0" processingTime="0" totalEventsProcessed="2" eventCount="2" droppedCount="0" memoryUsed="63212">
+    <event name="database_xml_deadlock_report" package="sqlserver" timestamp="2026-06-05T06:00:16.960Z">
+        <data name="deadlock_cycle_id">
+            <type name="uint64" package="package0"/>
+            <value>
+                625
+            </value>
+        </data>
+        <data name="server_name">
+            <type name="unicode_string" package="package0"/>
+            <value>
+                pratiksha-sql-server-01
+            </value>
+        </data>
+        <data name="database_name">
+            <type name="unicode_string" package="package0"/>
+            <value>
+                quotes-sql-db
+            </value>
+        </data>
+        <data name="xml_report">
+            <type name="xml" package="package0"/>
+            <value>
+                <deadlock>
+                    <victim-list>
+                        <victimProcess id="process237f7a9f048"/>
+                    </victim-list>
+                    <process-list>
+                        <process id="process237f7a9f048" taskpriority="0" logused="812" waitresource="XACT: 5:14663:0 KEY: 5:72057594049069056 (61a06abd401c)" waittime="5880" ownerId="61083" transactionname="user_transaction" lasttranstarted="2026-06-05T06:00:06.067" XDES="0x237de978480" lockMode="S" schedulerid="2" kpid="110116" status="suspended" spid="51" sbid="0" ecid="0" priority="0" trancount="2" lastbatchstarted="2026-06-05T06:00:06.067" lastbatchcompleted="2026-06-05T05:59:59.220" lastattention="1900-01-01T00:00:00.220" clientapp="vscode-mssql-Query" hostname="PRATIKSHA" hostpid="6752" loginname="pratiksha-quotesdb" isolationlevel="read committed (2)" xactid="61083" currentdb="5" currentdbname="quotes-sql-db" lockTimeout="4294967295" clientoption1="671156320" clientoption2="390200">
+                            <executionStack>
+                                <frame procname="unknown" queryhash="0x50be3371130b83a2" queryplanhash="0xb9c7e9aa308632b3" line="9" stmtstart="234" stmtend="358" sqlhandle="0x020000008d707d1d58fbc8c5197a852548ec215be6c8ff470000000000000000000000000000000000000000">
+                                    unknown
+                                </frame>
+                                <frame procname="unknown" queryhash="0x50be3371130b83a2" queryplanhash="0xb9c7e9aa308632b3" line="9" stmtstart="234" stmtend="358" sqlhandle="0x020000001d9938207d0c7aa80d946791f348b03f3e5e26490000000000000000000000000000000000000000">
+                                    unknown
+                                </frame>
+                            </executionStack>
+                            <stackFrames>
+                                <frame id="00" address="0x7FF9CB405604" pdb="ntdll.pdb" age="1" guid="85FA1D68-77C1-E5A0-F114-2B5D68F9007D" module="ntdll" rva="0x165604"/>
+                                <frame id="01" address="0x7FF9C88E439C" pdb="kernelbase.pdb" age="1" guid="70E26705-1BCF-38FE-66C5-E22592F9CCBE" module="kernelbase" rva="0xC439C"/>
+                                <frame id="02" address="0x7FF9351066CD" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x66CD"/>
+                                <frame id="03" address="0x7FF9351065FB" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x65FB"/>
+                                <frame id="04" address="0x7FF935102C49" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x2C49"/>
+                                <frame id="05" address="0x7FF9351026EF" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x26EF"/>
+                                <frame id="06" address="0x7FF9351024BB" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x24BB"/>
+                                <frame id="07" address="0x7FF93510387F" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x387F"/>
+                                <frame id="08" address="0x7FF92C8A0C15" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0xC0C15"/>
+                                <frame id="09" address="0x7FF92C8A0E8B" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0xC0E8B"/>
+                                <frame id="10" address="0x7FF92CC1788F" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x43788F"/>
+                                <frame id="11" address="0x7FF92CB29296" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x349296"/>
+                                <frame id="12" address="0x7FF92C856754" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x76754"/>
+                                <frame id="13" address="0x7FF92C84F3B5" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x6F3B5"/>
+                                <frame id="14" address="0x7FF92C84F18F" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x6F18F"/>
+                                <frame id="15" address="0x7FF92C84526A" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x6526A"/>
+                                <frame id="16" address="0x7FF934592257" pdb="SqlTsEs.pdb" age="2" guid="A6B1E4E1-7C11-49EC-8240-E98203D5BBB5" module="SqlTsEs" rva="0x2257"/>
+                                <frame id="17" address="0x7FF92C85BA94" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x7BA94"/>
+                                <frame id="18" address="0x7FF92C80D7D8" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x2D7D8"/>
+                                <frame id="19" address="0x7FF92D76955A" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0xF8955A"/>
+                                <frame id="20" address="0x7FF92C80D7D8" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x2D7D8"/>
+                                <frame id="21" address="0x7FF92C85AB41" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x7AB41"/>
+                                <frame id="22" address="0x7FF92C80D1CF" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x2D1CF"/>
+                                <frame id="23" address="0x7FF92C81FEDE" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x3FEDE"/>
+                                <frame id="24" address="0x7FF930BDB9B8" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x1B9B8"/>
+                                <frame id="25" address="0x7FF930BEE4FC" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x2E4FC"/>
+                                <frame id="26" address="0x7FF930BEE20D" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x2E20D"/>
+                                <frame id="27" address="0x7FF930F344DA" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x3744DA"/>
+                                <frame id="28" address="0x7FF930F33BEC" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x373BEC"/>
+                                <frame id="29" address="0x7FF930BD588E" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x1588E"/>
+                                <frame id="30" address="0x7FF930F355B0" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x3755B0"/>
+                                <frame id="31" address="0x7FF930BD60F1" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x160F1"/>
+                                <frame id="32" address="0x7FF930BD6DEB" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x16DEB"/>
+                                <frame id="33" address="0x7FF930BD588E" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x1588E"/>
+                                <frame id="34" address="0x7FF930BCD7AC" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0xD7AC"/>
+                                <frame id="35" address="0x7FF930BCB081" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0xB081"/>
+                                <frame id="36" address="0x7FF930BCB250" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0xB250"/>
+                                <frame id="37" address="0x7FF93510A0B3" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0xA0B3"/>
+                                <frame id="38" address="0x7FF93510A2E6" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0xA2E6"/>
+                                <frame id="39" address="0x7FF935109B14" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x9B14"/>
+                            </stackFrames>
+                            <inputbuf>
+                                BEGIN TRANSACTION;
+
+UPDATE Quotes
+SET Text = 'Locked By Session 1'
+WHERE Id = 1;
+
+WAITFOR DELAY '00:00:05';
+
+UPDATE Quotes
+SET Text = 'Session 1 Wants Row 2'
+WHERE Id = 2;
+                            </inputbuf>
+                        </process>
+                        <process id="process237ef7c7c18" taskpriority="0" logused="812" waitresource="XACT: 5:14660:0 KEY: 5:72057594049069056 (8194443284a0)" waittime="2097" ownerId="61097" transactionname="user_transaction" lasttranstarted="2026-06-05T06:00:09.860" XDES="0x237fe71c480" lockMode="S" schedulerid="1" kpid="113296" status="suspended" spid="62" sbid="0" ecid="0" priority="0" trancount="2" lastbatchstarted="2026-06-05T06:00:09.860" lastbatchcompleted="2026-06-05T06:00:09.850" lastattention="1900-01-01T00:00:00.850" clientapp="vscode-mssql-Query" hostname="PRATIKSHA" hostpid="6752" loginname="pratiksha-quotesdb" isolationlevel="read committed (2)" xactid="61097" currentdb="5" currentdbname="quotes-sql-db" lockTimeout="4294967295" clientoption1="671156320" clientoption2="390200">
+                            <executionStack>
+                                <frame procname="unknown" queryhash="0x50be3371130b83a2" queryplanhash="0xb9c7e9aa308632b3" line="9" stmtstart="234" stmtend="358" sqlhandle="0x020000008d707d1d58fbc8c5197a852548ec215be6c8ff470000000000000000000000000000000000000000">
+                                    unknown
+                                </frame>
+                                <frame procname="unknown" queryhash="0x50be3371130b83a2" queryplanhash="0xb9c7e9aa308632b3" line="9" stmtstart="234" stmtend="358" sqlhandle="0x020000009dbd3b0054c506b741d8eb932e85d251b014fdb00000000000000000000000000000000000000000">
+                                    unknown
+                                </frame>
+                            </executionStack>
+                            <stackFrames>
+                                <frame id="00" address="0x7FF9CB405604" pdb="ntdll.pdb" age="1" guid="85FA1D68-77C1-E5A0-F114-2B5D68F9007D" module="ntdll" rva="0x165604"/>
+                                <frame id="01" address="0x7FF9C88E439C" pdb="kernelbase.pdb" age="1" guid="70E26705-1BCF-38FE-66C5-E22592F9CCBE" module="kernelbase" rva="0xC439C"/>
+                                <frame id="02" address="0x7FF9351066CD" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x66CD"/>
+                                <frame id="03" address="0x7FF9351065FB" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x65FB"/>
+                                <frame id="04" address="0x7FF935102C49" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x2C49"/>
+                                <frame id="05" address="0x7FF9351026EF" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x26EF"/>
+                                <frame id="06" address="0x7FF9351024BB" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x24BB"/>
+                                <frame id="07" address="0x7FF93510387F" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x387F"/>
+                                <frame id="08" address="0x7FF92C8A0C15" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0xC0C15"/>
+                                <frame id="09" address="0x7FF92C8A0E8B" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0xC0E8B"/>
+                                <frame id="10" address="0x7FF92CC1788F" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x43788F"/>
+                                <frame id="11" address="0x7FF92CB29296" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x349296"/>
+                                <frame id="12" address="0x7FF92C856754" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x76754"/>
+                                <frame id="13" address="0x7FF92C84F3B5" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x6F3B5"/>
+                                <frame id="14" address="0x7FF92C84F18F" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x6F18F"/>
+                                <frame id="15" address="0x7FF92C84526A" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x6526A"/>
+                                <frame id="16" address="0x7FF934592257" pdb="SqlTsEs.pdb" age="2" guid="A6B1E4E1-7C11-49EC-8240-E98203D5BBB5" module="SqlTsEs" rva="0x2257"/>
+                                <frame id="17" address="0x7FF92C85BA94" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x7BA94"/>
+                                <frame id="18" address="0x7FF92C80D7D8" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x2D7D8"/>
+                                <frame id="19" address="0x7FF92D76955A" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0xF8955A"/>
+                                <frame id="20" address="0x7FF92C80D7D8" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x2D7D8"/>
+                                <frame id="21" address="0x7FF92C85AB41" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x7AB41"/>
+                                <frame id="22" address="0x7FF92C80D1CF" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x2D1CF"/>
+                                <frame id="23" address="0x7FF92C81FEDE" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x3FEDE"/>
+                                <frame id="24" address="0x7FF930BDB9B8" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x1B9B8"/>
+                                <frame id="25" address="0x7FF930BEE4FC" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x2E4FC"/>
+                                <frame id="26" address="0x7FF930BEE20D" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x2E20D"/>
+                                <frame id="27" address="0x7FF930F344DA" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x3744DA"/>
+                                <frame id="28" address="0x7FF930F33BEC" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x373BEC"/>
+                                <frame id="29" address="0x7FF930BD588E" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x1588E"/>
+                                <frame id="30" address="0x7FF930F355B0" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x3755B0"/>
+                                <frame id="31" address="0x7FF930BD60F1" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x160F1"/>
+                                <frame id="32" address="0x7FF930BD6DEB" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x16DEB"/>
+                                <frame id="33" address="0x7FF930BD588E" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x1588E"/>
+                                <frame id="34" address="0x7FF930BCD7AC" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0xD7AC"/>
+                                <frame id="35" address="0x7FF930BCB081" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0xB081"/>
+                                <frame id="36" address="0x7FF930BCB250" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0xB250"/>
+                                <frame id="37" address="0x7FF93510A0B3" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0xA0B3"/>
+                                <frame id="38" address="0x7FF93510A2E6" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0xA2E6"/>
+                                <frame id="39" address="0x7FF935109B14" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x9B14"/>
+                            </stackFrames>
+                            <inputbuf>
+                                BEGIN TRANSACTION;
+
+UPDATE Quotes
+SET Text = 'Locked By Session 2'
+WHERE Id = 2;
+
+WAITFOR DELAY '00:00:05';
+
+UPDATE Quotes
+SET Text = 'Session 2 Wants Row 1'
+WHERE Id = 1;
+                            </inputbuf>
+                        </process>
+                    </process-list>
+                    <resource-list>
+                        <xactlock xdesIdLow="14663" xdesIdHigh="0" dbid="5" id="lock237e6e8d300" mode="X">
+                            <UnderlyingResource>
+                                <keylock hobtid="72057594049069056" dbid="5" objectname="5a934750-111b-4282-88c5-76737f4073d9.dbo.Quotes" indexname="PK_Quotes"/>
+                            </UnderlyingResource>
+                            <owner-list>
+                                <owner id="process237ef7c7c18" mode="X"/>
+                            </owner-list>
+                            <waiter-list>
+                                <waiter id="process237f7a9f048" mode="S" requestType="wait"/>
+                            </waiter-list>
+                        </xactlock>
+                        <xactlock xdesIdLow="14660" xdesIdHigh="0" dbid="5" id="lock237f6c00980" mode="X">
+                            <UnderlyingResource>
+                                <keylock hobtid="72057594049069056" dbid="5" objectname="5a934750-111b-4282-88c5-76737f4073d9.dbo.Quotes" indexname="PK_Quotes"/>
+                            </UnderlyingResource>
+                            <owner-list>
+                                <owner id="process237f7a9f048" mode="X"/>
+                            </owner-list>
+                            <waiter-list>
+                                <waiter id="process237ef7c7c18" mode="S" requestType="wait"/>
+                            </waiter-list>
+                        </xactlock>
+                    </resource-list>
+                </deadlock>
+            </value>
+        </data>
+        <data name="is_primary_replica">
+            <type name="unicode_string" package="package0"/>
+            <value>
+                True
+            </value>
+        </data>
+    </event>
+    <event name="database_xml_deadlock_report" package="sqlserver" timestamp="2026-06-05T06:11:30.417Z">
+        <data name="deadlock_cycle_id">
+            <type name="uint64" package="package0"/>
+            <value>
+                760
+            </value>
+        </data>
+        <data name="server_name">
+            <type name="unicode_string" package="package0"/>
+            <value>
+                pratiksha-sql-server-01
+            </value>
+        </data>
+        <data name="database_name">
+            <type name="unicode_string" package="package0"/>
+            <value>
+                quotes-sql-db
+            </value>
+        </data>
+        <data name="xml_report">
+            <type name="xml" package="package0"/>
+            <value>
+                <deadlock>
+                    <victim-list>
+                        <victimProcess id="process237de425828"/>
+                    </victim-list>
+                    <process-list>
+                        <process id="process237de425828" taskpriority="0" logused="812" waitresource="XACT: 5:14679:0 KEY: 5:72057594049069056 (61a06abd401c)" waittime="7330" ownerId="68250" transactionname="user_transaction" lasttranstarted="2026-06-05T06:11:18.073" XDES="0x237de978480" lockMode="S" schedulerid="2" kpid="98364" status="suspended" spid="51" sbid="0" ecid="0" priority="0" trancount="2" lastbatchstarted="2026-06-05T06:11:18.073" lastbatchcompleted="2026-06-05T06:11:13.680" lastattention="1900-01-01T00:00:00.680" clientapp="vscode-mssql-Query" hostname="PRATIKSHA" hostpid="6752" loginname="pratiksha-quotesdb" isolationlevel="read committed (2)" xactid="68250" currentdb="5" currentdbname="quotes-sql-db" lockTimeout="4294967295" clientoption1="671156320" clientoption2="390200">
+                            <executionStack>
+                                <frame procname="unknown" queryhash="0x50be3371130b83a2" queryplanhash="0xb9c7e9aa308632b3" line="9" stmtstart="234" stmtend="358" sqlhandle="0x020000008d707d1d58fbc8c5197a852548ec215be6c8ff470000000000000000000000000000000000000000">
+                                    unknown
+                                </frame>
+                                <frame procname="unknown" queryhash="0x50be3371130b83a2" queryplanhash="0xb9c7e9aa308632b3" line="9" stmtstart="234" stmtend="358" sqlhandle="0x020000001d9938207d0c7aa80d946791f348b03f3e5e26490000000000000000000000000000000000000000">
+                                    unknown
+                                </frame>
+                            </executionStack>
+                            <stackFrames>
+                                <frame id="00" address="0x7FF9CB405604" pdb="ntdll.pdb" age="1" guid="85FA1D68-77C1-E5A0-F114-2B5D68F9007D" module="ntdll" rva="0x165604"/>
+                                <frame id="01" address="0x7FF9C88E439C" pdb="kernelbase.pdb" age="1" guid="70E26705-1BCF-38FE-66C5-E22592F9CCBE" module="kernelbase" rva="0xC439C"/>
+                                <frame id="02" address="0x7FF9351066CD" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x66CD"/>
+                                <frame id="03" address="0x7FF9351065FB" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x65FB"/>
+                                <frame id="04" address="0x7FF935102C49" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x2C49"/>
+                                <frame id="05" address="0x7FF9351026EF" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x26EF"/>
+                                <frame id="06" address="0x7FF9351024BB" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x24BB"/>
+                                <frame id="07" address="0x7FF93510387F" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x387F"/>
+                                <frame id="08" address="0x7FF92C8A0C15" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0xC0C15"/>
+                                <frame id="09" address="0x7FF92C8A0E8B" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0xC0E8B"/>
+                                <frame id="10" address="0x7FF92CC1788F" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x43788F"/>
+                                <frame id="11" address="0x7FF92CB29296" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x349296"/>
+                                <frame id="12" address="0x7FF92C856754" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x76754"/>
+                                <frame id="13" address="0x7FF92C84F3B5" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x6F3B5"/>
+                                <frame id="14" address="0x7FF92C84F18F" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x6F18F"/>
+                                <frame id="15" address="0x7FF92C84526A" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x6526A"/>
+                                <frame id="16" address="0x7FF934592257" pdb="SqlTsEs.pdb" age="2" guid="A6B1E4E1-7C11-49EC-8240-E98203D5BBB5" module="SqlTsEs" rva="0x2257"/>
+                                <frame id="17" address="0x7FF92C85BA94" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x7BA94"/>
+                                <frame id="18" address="0x7FF92C80D7D8" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x2D7D8"/>
+                                <frame id="19" address="0x7FF92D76955A" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0xF8955A"/>
+                                <frame id="20" address="0x7FF92C80D7D8" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x2D7D8"/>
+                                <frame id="21" address="0x7FF92C85AB41" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x7AB41"/>
+                                <frame id="22" address="0x7FF92C80D1CF" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x2D1CF"/>
+                                <frame id="23" address="0x7FF92C81FEDE" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x3FEDE"/>
+                                <frame id="24" address="0x7FF930BDB9B8" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x1B9B8"/>
+                                <frame id="25" address="0x7FF930BEE4FC" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x2E4FC"/>
+                                <frame id="26" address="0x7FF930BEE20D" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x2E20D"/>
+                                <frame id="27" address="0x7FF930F344DA" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x3744DA"/>
+                                <frame id="28" address="0x7FF930F33BEC" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x373BEC"/>
+                                <frame id="29" address="0x7FF930BD588E" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x1588E"/>
+                                <frame id="30" address="0x7FF930F355B0" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x3755B0"/>
+                                <frame id="31" address="0x7FF930BD60F1" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x160F1"/>
+                                <frame id="32" address="0x7FF930BD6DEB" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x16DEB"/>
+                                <frame id="33" address="0x7FF930BD588E" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x1588E"/>
+                                <frame id="34" address="0x7FF930BCD7AC" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0xD7AC"/>
+                                <frame id="35" address="0x7FF930BCB081" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0xB081"/>
+                                <frame id="36" address="0x7FF930BCB250" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0xB250"/>
+                                <frame id="37" address="0x7FF93510A0B3" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0xA0B3"/>
+                                <frame id="38" address="0x7FF93510A2E6" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0xA2E6"/>
+                                <frame id="39" address="0x7FF935109B14" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x9B14"/>
+                            </stackFrames>
+                            <inputbuf>
+                                BEGIN TRANSACTION;
+
+UPDATE Quotes
+SET Text = 'Locked By Session 1'
+WHERE Id = 1;
+
+WAITFOR DELAY '00:00:05';
+
+UPDATE Quotes
+SET Text = 'Session 1 Wants Row 2'
+WHERE Id = 2;
+                            </inputbuf>
+                        </process>
+                        <process id="process237f7a90478" taskpriority="0" logused="812" waitresource="XACT: 5:14678:0 KEY: 5:72057594049069056 (8194443284a0)" waittime="3253" ownerId="68264" transactionname="user_transaction" lasttranstarted="2026-06-05T06:11:22.153" XDES="0x237fe71c480" lockMode="S" schedulerid="1" kpid="86740" status="suspended" spid="62" sbid="0" ecid="0" priority="0" trancount="2" lastbatchstarted="2026-06-05T06:11:22.153" lastbatchcompleted="2026-06-05T06:11:05.950" lastattention="1900-01-01T00:00:00.950" clientapp="vscode-mssql-Query" hostname="PRATIKSHA" hostpid="6752" loginname="pratiksha-quotesdb" isolationlevel="read committed (2)" xactid="68264" currentdb="5" currentdbname="quotes-sql-db" lockTimeout="4294967295" clientoption1="671156320" clientoption2="390200">
+                            <executionStack>
+                                <frame procname="unknown" queryhash="0x50be3371130b83a2" queryplanhash="0xb9c7e9aa308632b3" line="9" stmtstart="234" stmtend="358" sqlhandle="0x020000008d707d1d58fbc8c5197a852548ec215be6c8ff470000000000000000000000000000000000000000">
+                                    unknown
+                                </frame>
+                                <frame procname="unknown" queryhash="0x50be3371130b83a2" queryplanhash="0xb9c7e9aa308632b3" line="9" stmtstart="234" stmtend="358" sqlhandle="0x020000009dbd3b0054c506b741d8eb932e85d251b014fdb00000000000000000000000000000000000000000">
+                                    unknown
+                                </frame>
+                            </executionStack>
+                            <stackFrames>
+                                <frame id="00" address="0x7FF9CB405604" pdb="ntdll.pdb" age="1" guid="85FA1D68-77C1-E5A0-F114-2B5D68F9007D" module="ntdll" rva="0x165604"/>
+                                <frame id="01" address="0x7FF9C88E439C" pdb="kernelbase.pdb" age="1" guid="70E26705-1BCF-38FE-66C5-E22592F9CCBE" module="kernelbase" rva="0xC439C"/>
+                                <frame id="02" address="0x7FF9351066CD" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x66CD"/>
+                                <frame id="03" address="0x7FF9351065FB" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x65FB"/>
+                                <frame id="04" address="0x7FF935102C49" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x2C49"/>
+                                <frame id="05" address="0x7FF9351026EF" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x26EF"/>
+                                <frame id="06" address="0x7FF9351024BB" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x24BB"/>
+                                <frame id="07" address="0x7FF93510387F" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x387F"/>
+                                <frame id="08" address="0x7FF92C8A0C15" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0xC0C15"/>
+                                <frame id="09" address="0x7FF92C8A0E8B" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0xC0E8B"/>
+                                <frame id="10" address="0x7FF92CC1788F" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x43788F"/>
+                                <frame id="11" address="0x7FF92CB29296" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x349296"/>
+                                <frame id="12" address="0x7FF92C856754" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x76754"/>
+                                <frame id="13" address="0x7FF92C84F3B5" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x6F3B5"/>
+                                <frame id="14" address="0x7FF92C84F18F" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x6F18F"/>
+                                <frame id="15" address="0x7FF92C84526A" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x6526A"/>
+                                <frame id="16" address="0x7FF934592257" pdb="SqlTsEs.pdb" age="2" guid="A6B1E4E1-7C11-49EC-8240-E98203D5BBB5" module="SqlTsEs" rva="0x2257"/>
+                                <frame id="17" address="0x7FF92C85BA94" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x7BA94"/>
+                                <frame id="18" address="0x7FF92C80D7D8" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x2D7D8"/>
+                                <frame id="19" address="0x7FF92D76955A" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0xF8955A"/>
+                                <frame id="20" address="0x7FF92C80D7D8" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x2D7D8"/>
+                                <frame id="21" address="0x7FF92C85AB41" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x7AB41"/>
+                                <frame id="22" address="0x7FF92C80D1CF" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x2D1CF"/>
+                                <frame id="23" address="0x7FF92C81FEDE" pdb="sqlmin.pdb" age="2" guid="0FAA1058-12B5-40C2-B866-0ABE484F8954" module="sqlmin" rva="0x3FEDE"/>
+                                <frame id="24" address="0x7FF930BDB9B8" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x1B9B8"/>
+                                <frame id="25" address="0x7FF930BEE4FC" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x2E4FC"/>
+                                <frame id="26" address="0x7FF930BEE20D" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x2E20D"/>
+                                <frame id="27" address="0x7FF930F344DA" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x3744DA"/>
+                                <frame id="28" address="0x7FF930F33BEC" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x373BEC"/>
+                                <frame id="29" address="0x7FF930BD588E" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x1588E"/>
+                                <frame id="30" address="0x7FF930F355B0" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x3755B0"/>
+                                <frame id="31" address="0x7FF930BD60F1" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x160F1"/>
+                                <frame id="32" address="0x7FF930BD6DEB" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x16DEB"/>
+                                <frame id="33" address="0x7FF930BD588E" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0x1588E"/>
+                                <frame id="34" address="0x7FF930BCD7AC" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0xD7AC"/>
+                                <frame id="35" address="0x7FF930BCB081" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0xB081"/>
+                                <frame id="36" address="0x7FF930BCB250" pdb="sqllang.pdb" age="2" guid="5BB178D1-A8D1-4A84-8ABF-B574584A5100" module="sqllang" rva="0xB250"/>
+                                <frame id="37" address="0x7FF93510A0B3" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0xA0B3"/>
+                                <frame id="38" address="0x7FF93510A2E6" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0xA2E6"/>
+                                <frame id="39" address="0x7FF935109B14" pdb="SqlDK.pdb" age="2" guid="09BF73A7-D94F-42BE-B8CD-1BB0EF699A96" module="SqlDK" rva="0x9B14"/>
+                            </stackFrames>
+                            <inputbuf>
+                                BEGIN TRANSACTION;
+
+UPDATE Quotes
+SET Text = 'Locked By Session 2'
+WHERE Id = 2;
+
+WAITFOR DELAY '00:00:05';
+
+UPDATE Quotes
+SET Text = 'Session 2 Wants Row 1'
+WHERE Id = 1;
+                            </inputbuf>
+                        </process>
+                    </process-list>
+                    <resource-list>
+                        <xactlock xdesIdLow="14679" xdesIdHigh="0" dbid="5" id="lock237e6e95a00" mode="X">
+                            <UnderlyingResource>
+                                <keylock hobtid="72057594049069056" dbid="5" objectname="5a934750-111b-4282-88c5-76737f4073d9.dbo.Quotes" indexname="PK_Quotes"/>
+                            </UnderlyingResource>
+                            <owner-list>
+                                <owner id="process237f7a90478" mode="X"/>
+                            </owner-list>
+                            <waiter-list>
+                                <waiter id="process237de425828" mode="S" requestType="wait"/>
+                            </waiter-list>
+                        </xactlock>
+                        <xactlock xdesIdLow="14678" xdesIdHigh="0" dbid="5" id="lock237e6ec0180" mode="X">
+                            <UnderlyingResource>
+                                <keylock hobtid="72057594049069056" dbid="5" objectname="5a934750-111b-4282-88c5-76737f4073d9.dbo.Quotes" indexname="PK_Quotes"/>
+                            </UnderlyingResource>
+                            <owner-list>
+                                <owner id="process237de425828" mode="X"/>
+                            </owner-list>
+                            <waiter-list>
+                                <waiter id="process237f7a90478" mode="S" requestType="wait"/>
+                            </waiter-list>
+                        </xactlock>
+                    </resource-list>
+                </deadlock>
+            </value>
+        </data>
+        <data name="is_primary_replica">
+            <type name="unicode_string" package="package0"/>
+            <value>
+                True
+            </value>
+        </data>
+    </event>
+</RingBufferTarget>
