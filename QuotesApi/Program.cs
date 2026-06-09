@@ -14,7 +14,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using System.Diagnostics;
 using Microsoft.AspNetCore.ResponseCompression;
 
 
@@ -112,14 +111,32 @@ builder.Services.AddAuthorization(options =>
 
 builder.Services.AddScoped<IAuthorizationHandler, DeleteOwnQuoteHandler>();
 
-builder.Services.AddDbContext<AppDbContext>((serviceProvider, options) =>
+builder.Services.AddDbContext<AppDbContext>((_, options) =>
 {
-    options.UseSqlServer(
-        "Server=tcp:pratiksha-sql-server-01.database.windows.net,1433;Initial Catalog=quotes-sql-db;Persist Security Info=False;User ID=pratiksha-quotesdb;Password=@Database123;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
-    );
+    var connStr = builder.Configuration.GetConnectionString("DefaultConnection");
 
-    options.EnableSensitiveDataLogging();
-    options.LogTo(Console.WriteLine, LogLevel.Information);
+    if (string.IsNullOrEmpty(connStr))
+        options.UseSqlite("Data Source=dev.db");
+    else
+        options.UseSqlServer(connStr);
+
+    if (builder.Environment.IsDevelopment())
+    {
+        options.EnableSensitiveDataLogging();
+        options.LogTo(Console.WriteLine, LogLevel.Information);
+    }
+});
+
+var allowedOrigins = builder.Configuration["AllowedOrigins"]
+    ?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+    ?? ["http://localhost:4200", "https://mango-river-03f3a6100.7.azurestaticapps.net"];
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("Angular", policy =>
+        policy.WithOrigins(allowedOrigins)
+              .AllowAnyHeader()
+              .AllowAnyMethod());
 });
 
 builder.Services.AddScoped<
@@ -128,6 +145,13 @@ builder.Services.AddScoped<
 
 builder.Services.AddTransient<GuidGenerator>();
 builder.Services.AddSingleton<IClock, SystemClock>();
+
+// ── Background task queue ──────────────────────────────────────────────────
+// BackgroundTaskQueue is registered as a singleton so both the HTTP endpoint
+// and the hosted service share the same channel instance.
+builder.Services.AddSingleton<IBackgroundTaskQueue, BackgroundTaskQueue>();
+builder.Services.AddHostedService<QueuedHostedService>();
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddResponseCompression(opts =>
 {
@@ -192,6 +216,8 @@ async Task RevokeFamily(AppDbContext db, string familyId, CancellationToken ct)
 var app = builder.Build();
 
 app.UseResponseCompression();
+app.UseRouting();
+app.UseCors("Angular");
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -330,7 +356,7 @@ app.MapGet("/api/quotes", async (
 {
     var quotes = await db.Quotes
         .Where(q => !q.IsDeleted)
-        .OrderBy(q => q.Id)
+        .OrderByDescending(q => q.Id)
         .Skip((page - 1) * size)
         .Take(size)
         .ToListAsync(cancellationToken);
@@ -570,124 +596,51 @@ app.MapPost("/api/auth/refresh", async (
 
 
 
+// ── Background task test endpoint ─────────────────────────────────────────
+// Returns 202 immediately; the simulated work runs asynchronously in the
+// QueuedHostedService loop on a background thread.
+app.MapPost("/api/background/test", async (
+    IBackgroundTaskQueue queue,
+    ILoggerFactory loggerFactory,
+    CancellationToken cancellationToken) =>
+{
+    var jobId  = Guid.NewGuid().ToString("N")[..8];
+    var logger = loggerFactory.CreateLogger("BackgroundJob");
+
+    await queue.EnqueueAsync(async ct =>
+    {
+        logger.LogInformation(
+            "Job {JobId} started (simulating 5 s of work).", jobId);
+
+        // Simulate long-running work — respects the host shutdown token.
+        await Task.Delay(TimeSpan.FromSeconds(5), ct);
+
+        logger.LogInformation(
+            "Job {JobId} completed.", jobId);
+    }, cancellationToken);
+
+    return Results.Accepted(
+        value: new { jobId, status = "queued", message = "Work item enqueued." });
+});
+
 if (!app.Environment.IsEnvironment("Testing"))
 {
     using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-    var db = scope.ServiceProvider
-        .GetRequiredService<AppDbContext>();
-
-    // if (!db.Users.Any())
-    // {
-    //     db.Users.Add(new User(
-    //         "admin@example.com",
-    //         "password123"));
-
-    //     db.SaveChanges();
-    // }
-}
-
-using (var tempScope = builder.Services.BuildServiceProvider().CreateScope())
-{
-    var context = tempScope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-    // ---------------- TRACKED QUERY ----------------
-
-    GC.Collect();
-    GC.WaitForPendingFinalizers();
-    GC.Collect();
-
-    long trackedBefore = GC.GetAllocatedBytesForCurrentThread();
-
-    var trackedWatch = Stopwatch.StartNew();
-
-    var trackedQuotes = await context.Quotes
-        .OrderBy(q => q.Id)
-        .Take(10000)
-        .ToListAsync();
-
-    trackedWatch.Stop();
-
-    long trackedAfter = GC.GetAllocatedBytesForCurrentThread();
-
-    Console.WriteLine("==== TRACKED QUERY ====");
-    Console.WriteLine($"Rows: {trackedQuotes.Count}");
-    Console.WriteLine($"Time: {trackedWatch.ElapsedMilliseconds} ms");
-    Console.WriteLine($"Allocated: {trackedAfter - trackedBefore} bytes");
-
-
-
-    // ---------------- AS NO TRACKING QUERY ----------------
-
-    GC.Collect();
-    GC.WaitForPendingFinalizers();
-    GC.Collect();
-
-    long noTrackBefore = GC.GetAllocatedBytesForCurrentThread();
-
-    var noTrackWatch = Stopwatch.StartNew();
-
-    var noTrackQuotes = await context.Quotes
-        .AsNoTracking()
-        .OrderBy(q => q.Id)
-        .Take(10000)
-        .ToListAsync();
-
-    noTrackWatch.Stop();
-
-    long noTrackAfter = GC.GetAllocatedBytesForCurrentThread();
-
-    Console.WriteLine("==== AS NO TRACKING QUERY ====");
-    Console.WriteLine($"Rows: {noTrackQuotes.Count}");
-    Console.WriteLine($"Time: {noTrackWatch.ElapsedMilliseconds} ms");
-    Console.WriteLine($"Allocated: {noTrackAfter - noTrackBefore}");
-
-
-
-    // ---------------- FULL ENTITY QUERY ----------------
-
-    Console.WriteLine("==== FULL ENTITY QUERY ====");
-
-    var fullQuotes = await context.Quotes
-        .OrderBy(q => q.Id)
-        .Take(5)
-        .ToListAsync();
-
-
-
-    // ---------------- PROJECTED DTO QUERY ----------------
-
-    Console.WriteLine("==== PROJECTED DTO QUERY ====");
-
-    var projectedQuotes = await context.Quotes
-        .Select(q => new
-        {
-            q.Id,
-            q.Author
-        })
-        .OrderBy(q => q.Id)
-        .Take(5)
-        .ToListAsync();
-
-
-
-    // ---------------- CLIENT SIDE EVALUATION ----------------
-
-    Console.WriteLine("==== CLIENT SIDE EVALUATION ====");
-
-    bool IsLongAuthor(string author)
+    var connStr = builder.Configuration.GetConnectionString("DefaultConnection");
+    if (string.IsNullOrEmpty(connStr))
     {
-        return author.Length > 10;
+        // No SQL Server configured → SQLite local dev.
+        // EnsureCreated() generates the schema from the model without migrations.
+        db.Database.EnsureCreated();
+
+        if (!db.Users.Any())
+        {
+            db.Users.Add(new User("admin@example.com", "password123"));
+            db.SaveChanges();
+        }
     }
-
-    var clientEval = context.Quotes
-        .AsEnumerable()
-        .Where(q => IsLongAuthor(q.Author))
-        .Take(5)
-        .ToList();
-
-    Console.WriteLine($"Client-side rows: {clientEval.Count}");
 }
-
 
 app.Run();
