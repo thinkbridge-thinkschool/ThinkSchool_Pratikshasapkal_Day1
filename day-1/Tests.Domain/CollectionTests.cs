@@ -7,12 +7,12 @@ namespace Tests.Domain;
 public class CollectionTests
 {
     private static Collection Make(string name = "My Collection") =>
-        new(name, ownerId: 1);
+        new(name, ownerId: 1, new FakeClock());
 
     [Fact]
     public void Constructor_EmptyName_ThrowsArgumentException()
     {
-        var act = () => new Collection("", ownerId: 1);
+        var act = () => new Collection("", ownerId: 1, new FakeClock());
 
         act.Should().Throw<ArgumentException>()
             .WithMessage("Name cannot be empty");
@@ -23,7 +23,7 @@ public class CollectionTests
     {
         var longName = new string('a', 81);
 
-        var act = () => new Collection(longName, ownerId: 1);
+        var act = () => new Collection(longName, ownerId: 1, new FakeClock());
 
         act.Should().Throw<ArgumentException>()
             .WithMessage("Name must be between 3 and 80 characters");
@@ -32,11 +32,10 @@ public class CollectionTests
     [Fact]
     public void AddItem_51stItem_ThrowsInvalidOperationException()
     {
-        var clock = new FakeClock();
         var collection = Make();
-        for (var i = 1; i <= 50; i++) collection.AddItem(i, clock);
+        for (var i = 1; i <= 50; i++) collection.AddItem(i);
 
-        var act = () => collection.AddItem(51, clock);
+        var act = () => collection.AddItem(51);
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("Maximum 50 items allowed");
@@ -45,11 +44,10 @@ public class CollectionTests
     [Fact]
     public void AddItem_DuplicateQuoteId_ThrowsInvalidOperationException()
     {
-        var clock = new FakeClock();
         var collection = Make();
-        collection.AddItem(1, clock);
+        collection.AddItem(1);
 
-        var act = () => collection.AddItem(1, clock);
+        var act = () => collection.AddItem(1);
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("Duplicate quote is not allowed");
@@ -70,7 +68,7 @@ public class CollectionTests
     public void AddItem_ThenRemoveItem_CollectionIsEmpty()
     {
         var collection = Make();
-        collection.AddItem(1, new FakeClock());
+        collection.AddItem(1);
 
         collection.RemoveItem(1);
 
