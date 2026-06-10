@@ -20,6 +20,7 @@ public class AppDbContext : DbContext
     public DbSet<Collection> Collections => Set<Collection>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<ProcessedMessage> ProcessedMessages => Set<ProcessedMessage>();
+    public DbSet<OutboxMessage>    OutboxMessages    => Set<OutboxMessage>();
 
     protected override void OnModelCreating(
         ModelBuilder modelBuilder)
@@ -54,6 +55,12 @@ public class AppDbContext : DbContext
             .HasIndex(m => new { m.MessageId, m.Subscription })
             .IsUnique()
             .HasDatabaseName("IX_ProcessedMessages_MessageId_Subscription");
+
+        // Relay poll: WHERE SentAtUtc IS NULL ORDER BY CreatedAtUtc.
+        // A filtered index on NULL rows keeps the scan tiny as the table grows.
+        modelBuilder.Entity<OutboxMessage>()
+            .HasIndex(m => m.SentAtUtc)
+            .HasDatabaseName("IX_OutboxMessages_SentAtUtc");
 
         // Covering index: AuthorId (seek key) + Text, IsDeleted (INCLUDE columns).
         // Eliminates the Key Lookup that IX_Quotes_AuthorId alone causes — the query

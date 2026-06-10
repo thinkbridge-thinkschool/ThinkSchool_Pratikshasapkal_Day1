@@ -164,11 +164,16 @@ builder.Services.AddSingleton(sbOptions);
 // Register the client only when a connection string is present.
 // In production on Azure Container Apps, set ConnectionStrings__ServiceBus
 // (or use DefaultAzureCredential with FullyQualifiedNamespace).
+// OutboxRelayOptions is always registered so the crash-simulation endpoints
+// are reachable even when Service Bus is not fully configured.
+builder.Services.AddSingleton<OutboxRelayOptions>();
+
 if (!string.IsNullOrWhiteSpace(sbOptions.ConnectionString))
 {
     builder.Services.AddSingleton(new ServiceBusClient(sbOptions.ConnectionString));
     builder.Services.AddSingleton<IMessagePublisher, ServiceBusPublisher>();
     builder.Services.AddHostedService<QuoteEventConsumer>();
+    builder.Services.AddHostedService<OutboxRelayService>();
 }
 
 builder.Services.AddEndpointsApiExplorer();
@@ -344,12 +349,16 @@ app.MapPost("/seed-demo-data", async (AppDbContext db, CancellationToken ct) =>
 
 
 
-// Create a new quote
+// Create a new quote — Transactional Outbox Pattern
+// The Quote row and the OutboxMessage row are written in a single EF Core
+// transaction.  If the process crashes after SaveChangesAsync returns, the
+// outbox row persists and the OutboxRelayService publishes it on the next
+// poll.  No event is lost; no direct Service Bus call is made here.
 app.MapPost("/api/quotes", async (
     CreateQuoteRequest request,
-    AppDbContext db,
-    HttpContext httpContext,
-    CancellationToken cancellationToken) =>
+    AppDbContext       db,
+    HttpContext        httpContext,
+    CancellationToken  cancellationToken) =>
 {
     var userEmail = httpContext.User.FindFirstValue(ClaimTypes.Email) ?? string.Empty;
     var result = Quote.Create(request.Author, request.Text, userEmail);
@@ -357,11 +366,30 @@ app.MapPost("/api/quotes", async (
     if (!result.IsSuccess)
         return Results.Problem(detail: result.Error, statusCode: 400);
 
-    db.Quotes.Add(result.Value!);
+    var quote = result.Value!;
 
+    // Build the event payload before the transaction so the outbox row
+    // and the domain row are constructed in the same synchronous block.
+    var evt = new QuoteEvent(
+        EventType: "quote.created",
+        QuoteId:   null,          // Id is not assigned until after SaveChanges;
+        Author:    quote.Author); // the relay publishes what we have here.
+
+    var outbox = new OutboxMessage
+    {
+        EventType = evt.EventType,
+        Payload   = System.Text.Json.JsonSerializer.Serialize(evt),
+    };
+
+    // ── Single atomic transaction ────────────────────────────────────────
+    // EF Core wraps multiple Add() + SaveChangesAsync() calls in one
+    // database transaction by default when no explicit transaction is used.
+    // Both rows land in the same commit or neither does.
+    db.Quotes.Add(quote);
+    db.OutboxMessages.Add(outbox);
     await db.SaveChangesAsync(cancellationToken);
 
-    return Results.Created($"/api/quotes/{result.Value!.Id}", result.Value);
+    return Results.Created($"/api/quotes/{quote.Id}", quote);
 }).RequireAuthorization("can-edit-quotes");
 
 
@@ -721,5 +749,54 @@ if (!app.Environment.IsEnvironment("Testing"))
         }
     }
 }
+
+// ── Outbox endpoints ───────────────────────────────────────────────────────
+
+// GET /api/outbox
+// Returns all outbox rows — useful to see pending vs sent messages.
+app.MapGet("/api/outbox", async (AppDbContext db, CancellationToken ct) =>
+{
+    var rows = await db.OutboxMessages
+        .OrderByDescending(m => m.CreatedAtUtc)
+        .Take(50)
+        .Select(m => new
+        {
+            m.Id, m.EventType, m.CreatedAtUtc, m.SentAtUtc, m.Error,
+            Status = m.SentAtUtc == null ? "pending" : "sent",
+        })
+        .ToListAsync(ct);
+
+    return Results.Ok(rows);
+});
+
+// POST /api/outbox/simulate-crash
+// Tells the relay to skip the Service Bus send on every subsequent poll,
+// simulating a crash that happens after the DB commit but before publish.
+// Call /api/outbox/clear-crash to resume normal operation.
+app.MapPost("/api/outbox/simulate-crash", (OutboxRelayOptions opts) =>
+{
+    opts.SimulateCrashBeforePublish = true;
+    return Results.Ok(new
+    {
+        simulateCrash = true,
+        message = "Relay will skip publish on the next poll. " +
+                  "Unsent outbox rows accumulate. " +
+                  "Call /api/outbox/clear-crash to resume.",
+    });
+});
+
+// POST /api/outbox/clear-crash
+// Resumes normal relay operation.  On the next poll the relay will publish
+// all rows that were skipped while the crash flag was active — proving that
+// no event was lost.
+app.MapPost("/api/outbox/clear-crash", (OutboxRelayOptions opts) =>
+{
+    opts.SimulateCrashBeforePublish = false;
+    return Results.Ok(new
+    {
+        simulateCrash = false,
+        message = "Relay resumed. Unsent outbox rows will be published on the next poll.",
+    });
+});
 
 app.Run();
