@@ -1,0 +1,16 @@
+bin/
+obj/
+.azure/
+k6-v2.0.0-windows-amd64/
+*.db
+*.db-shm
+*.db-wal
+*.js
+*.json.lock
+loadtest.js
+dapper-vs-ef.js
+package-lock.json
+TYPES.md
+OBSERVABILITY.md
+SQLQueries/
+Repositories/SQLQueries/

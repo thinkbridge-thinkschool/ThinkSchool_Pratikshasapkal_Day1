@@ -15,6 +15,12 @@ using System.Text;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using Microsoft.AspNetCore.ResponseCompression;
+using Azure.Messaging.ServiceBus;
+using QuotesApi.Messaging;
+using Microsoft.Extensions.Caching.Hybrid;
+using QuotesApi.Metrics;
+using QuotesApi.Options;
+using System.Diagnostics;
 
 
 var builder = WebApplication.CreateBuilder(args);
@@ -151,6 +157,58 @@ builder.Services.AddSingleton<IClock, SystemClock>();
 // and the hosted service share the same channel instance.
 builder.Services.AddSingleton<IBackgroundTaskQueue, BackgroundTaskQueue>();
 builder.Services.AddHostedService<QueuedHostedService>();
+
+// ── Azure Service Bus ──────────────────────────────────────────────────────
+var sbOptions = builder.Configuration
+    .GetSection(ServiceBusOptions.SectionName)
+    .Get<ServiceBusOptions>() ?? new ServiceBusOptions();
+
+builder.Services.AddSingleton(sbOptions);
+
+// Register the client only when a connection string is present.
+// In production on Azure Container Apps, set ConnectionStrings__ServiceBus
+// (or use DefaultAzureCredential with FullyQualifiedNamespace).
+if (!string.IsNullOrWhiteSpace(sbOptions.ConnectionString))
+{
+    builder.Services.AddSingleton(new ServiceBusClient(sbOptions.ConnectionString));
+    builder.Services.AddSingleton<IMessagePublisher, ServiceBusPublisher>();
+    builder.Services.AddHostedService<QuoteEventConsumer>();
+}
+
+// ── HybridCache ───────────────────────────────────────────────────────────────
+// Two-tier write-through cache: L1 = in-process IMemoryCache, L2 = Redis
+// (or DistributedMemoryCache when Redis is not configured for local dev).
+//
+// HybridCache collapses concurrent cache misses for the same key into a single
+// factory invocation (stampede protection) — 50 concurrent requests to a cold
+// key trigger exactly one DB query; the other 49 await that same Task.
+var cacheOpts = builder.Configuration
+    .GetSection(CacheOptions.SectionName)
+    .Get<CacheOptions>() ?? new CacheOptions();
+
+builder.Services.AddSingleton(cacheOpts);
+builder.Services.AddSingleton<CacheMetrics>();
+
+if (!string.IsNullOrWhiteSpace(cacheOpts.RedisConnectionString))
+{
+    builder.Services.AddStackExchangeRedisCache(opts =>
+        opts.Configuration = cacheOpts.RedisConnectionString);
+}
+else
+{
+    // No Redis configured — fall back to an in-process distributed cache.
+    // Stampede protection and L1 are still active; L2 is simply co-located.
+    builder.Services.AddDistributedMemoryCache();
+}
+
+builder.Services.AddHybridCache(opts =>
+{
+    opts.DefaultEntryOptions = new HybridCacheEntryOptions
+    {
+        Expiration           = TimeSpan.FromSeconds(cacheOpts.QuoteByIdTtlSeconds),
+        LocalCacheExpiration = TimeSpan.FromSeconds(cacheOpts.LocalCacheTtlSeconds),
+    };
+});
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddResponseCompression(opts =>
@@ -347,31 +405,106 @@ app.MapPost("/api/quotes", async (
 
 
 
-// get all quotes with pagination
+// get all quotes with pagination — cache key includes page + size so each page
+// is cached independently; stale entries expire after QuoteListTtlSeconds.
 app.MapGet("/api/quotes", async (
     AppDbContext db,
+    HybridCache cache,
+    CacheMetrics cacheMetrics,
+    CacheOptions cacheCfg,
+    ILoggerFactory loggerFactory,
     CancellationToken cancellationToken,
     int page = 1,
     int size = 10) =>
 {
-    var quotes = await db.Quotes
-        .Where(q => !q.IsDeleted)
-        .OrderByDescending(q => q.Id)
-        .Skip((page - 1) * size)
-        .Take(size)
-        .ToListAsync(cancellationToken);
+    var logger   = loggerFactory.CreateLogger("QuotesApi.Endpoints");
+    var cacheKey = $"quotes:page:{page}:size:{size}";
+    var dbCalled = false;
+
+    var quotes = await cache.GetOrCreateAsync<List<QuoteResponse>>(
+        cacheKey,
+        async ct =>
+        {
+            dbCalled = true;
+            cacheMetrics.RecordMiss("quote_list");
+
+            logger.LogInformation(
+                "Cache miss — fetching quotes page:{Page} size:{Size} from database.",
+                page, size);
+
+            var sw = Stopwatch.StartNew();
+            var result = await db.Quotes
+                .Where(q => !q.IsDeleted)
+                .OrderByDescending(q => q.Id)
+                .Skip((page - 1) * size)
+                .Take(size)
+                .Select(q => new QuoteResponse(q.Id, q.Author, q.Text, q.IsDeleted, q.CreatedByEmail))
+                .ToListAsync(ct);
+            sw.Stop();
+
+            cacheMetrics.RecordDbQuery("quote_list", sw.Elapsed.TotalMilliseconds);
+            return result;
+        },
+        new HybridCacheEntryOptions
+        {
+            Expiration           = TimeSpan.FromSeconds(cacheCfg.QuoteListTtlSeconds),
+            LocalCacheExpiration = TimeSpan.FromSeconds(cacheCfg.LocalCacheTtlSeconds),
+        },
+        cancellationToken: cancellationToken);
+
+    if (!dbCalled)
+        cacheMetrics.RecordHit("quote_list");
 
     return Results.Ok(quotes);
 }).RequireAuthorization();
 
 
+// Hot read — cached by quote ID.  Stampede protection: if 50 concurrent
+// requests arrive for the same cold key, HybridCache calls the factory exactly
+// once; the other 49 await the in-flight ValueTask.  Observe this in logs:
+// only one "Cache miss" line appears regardless of concurrency.
 app.MapGet("/api/quotes/{id}", async (
     int id,
     AppDbContext db,
+    HybridCache cache,
+    CacheMetrics cacheMetrics,
+    CacheOptions cacheCfg,
+    ILoggerFactory loggerFactory,
     CancellationToken cancellationToken) =>
 {
-    var quote = await db.Quotes
-        .FirstOrDefaultAsync(q => q.Id == id && !q.IsDeleted, cancellationToken);
+    var logger   = loggerFactory.CreateLogger("QuotesApi.Endpoints");
+    var cacheKey = $"quote:{id}";
+    var dbCalled = false;
+
+    var quote = await cache.GetOrCreateAsync<QuoteResponse?>(
+        cacheKey,
+        async ct =>
+        {
+            dbCalled = true;
+            cacheMetrics.RecordMiss("quote_by_id");
+
+            logger.LogInformation(
+                "Cache miss — fetching quote:{QuoteId} from database.", id);
+
+            var sw = Stopwatch.StartNew();
+            var result = await db.Quotes
+                .Where(q => q.Id == id && !q.IsDeleted)
+                .Select(q => new QuoteResponse(q.Id, q.Author, q.Text, q.IsDeleted, q.CreatedByEmail))
+                .FirstOrDefaultAsync(ct);
+            sw.Stop();
+
+            cacheMetrics.RecordDbQuery("quote_by_id", sw.Elapsed.TotalMilliseconds);
+            return result;
+        },
+        new HybridCacheEntryOptions
+        {
+            Expiration           = TimeSpan.FromSeconds(cacheCfg.QuoteByIdTtlSeconds),
+            LocalCacheExpiration = TimeSpan.FromSeconds(cacheCfg.LocalCacheTtlSeconds),
+        },
+        cancellationToken: cancellationToken);
+
+    if (!dbCalled)
+        cacheMetrics.RecordHit("quote_by_id");
 
     if (quote is null)
         return Results.NotFound();
@@ -381,10 +514,13 @@ app.MapGet("/api/quotes/{id}", async (
 
 
 
-// soft-delete a quote by id — ownership enforced by DeleteOwnQuoteHandler
+// soft-delete a quote by id — ownership enforced by DeleteOwnQuoteHandler.
+// Evicts the cached entry so the next reader gets the deleted state immediately
+// rather than waiting for the TTL to expire.
 app.MapDelete("/api/quotes/{id}", async (
     int id,
     AppDbContext db,
+    HybridCache cache,
     IAuthorizationService authService,
     HttpContext httpContext,
     CancellationToken cancellationToken) =>
@@ -404,6 +540,7 @@ app.MapDelete("/api/quotes/{id}", async (
     quote.Delete();
 
     await db.SaveChangesAsync(cancellationToken);
+    await cache.RemoveAsync($"quote:{id}", cancellationToken);
 
     return Results.Ok(new { message = "Quote deleted successfully" });
 }).RequireAuthorization();
@@ -595,6 +732,66 @@ app.MapPost("/api/auth/refresh", async (
 
 
 
+
+// ── Service Bus endpoints ──────────────────────────────────────────────────
+
+// POST /api/messages/publish
+// Publishes a normal "quote.created" event. Returns 202 immediately;
+// subscribers process it asynchronously.
+app.MapPost("/api/messages/publish", async (
+    IServiceProvider  services,
+    CancellationToken cancellationToken) =>
+{
+    var publisher = services.GetService<IMessagePublisher>();
+    if (publisher is null)
+        return Results.Problem(
+            detail: "Service Bus is not configured. Set ServiceBus:ConnectionString.",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+
+    var evt = new QuoteEvent(
+        EventType: "quote.created",
+        QuoteId:   Random.Shared.Next(1, 10000),
+        Author:    "Marcus Aurelius");
+
+    await publisher.PublishAsync(evt, cancellationToken);
+
+    return Results.Accepted(value: new
+    {
+        status  = "published",
+        topic   = sbOptions.TopicName,
+        eventType = evt.EventType,
+    });
+});
+
+// POST /api/messages/publish-poison
+// Publishes a message with Poison=true. Every delivery attempt is abandoned
+// by the consumer, so Service Bus retries MaxDeliveryCount times then moves
+// the message to the Dead Letter Queue.
+app.MapPost("/api/messages/publish-poison", async (
+    IServiceProvider  services,
+    CancellationToken cancellationToken) =>
+{
+    var publisher = services.GetService<IMessagePublisher>();
+    if (publisher is null)
+        return Results.Problem(
+            detail: "Service Bus is not configured. Set ServiceBus:ConnectionString.",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+
+    var evt = new QuoteEvent(
+        EventType: "quote.poison",
+        QuoteId:   null,
+        Author:    null,
+        Poison:    true);
+
+    await publisher.PublishAsync(evt, cancellationToken);
+
+    return Results.Accepted(value: new
+    {
+        status  = "published",
+        poison  = true,
+        message = "Message will be retried MaxDeliveryCount times then moved to the DLQ.",
+    });
+});
 
 // ── Background task test endpoint ─────────────────────────────────────────
 // Returns 202 immediately; the simulated work runs asynchronously in the

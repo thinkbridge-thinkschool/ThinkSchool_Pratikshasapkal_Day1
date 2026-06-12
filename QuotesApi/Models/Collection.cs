@@ -1,4 +1,5 @@
 namespace QuotesApi.Models;
+
 using QuotesApi.Abstractions;
 
 public class Collection
@@ -63,19 +64,15 @@ public class Collection
 
         Items.Add(new CollectionItem(
             quoteId,
-            _clock.UtcNow.UtcDateTime));
+            (_clock?.UtcNow ?? DateTimeOffset.UtcNow).UtcDateTime));
     }
 
     public void RemoveItem(int quoteId)
     {
         var item = Items.FirstOrDefault(
-            x => x.QuoteId == quoteId);
-
-        if (item == null)
-        {
-            throw new InvalidOperationException(
+            x => x.QuoteId == quoteId)
+            ?? throw new InvalidOperationException(
                 "Quote not found in collection");
-        }
 
         Items.Remove(item);
     }
@@ -84,9 +81,10 @@ public class Collection
 public class CollectionItem
 {
     public int Id { get; private set; }
-    public int QuoteId { get; }
 
-    public DateTime AddedAt { get; }
+    public int QuoteId { get; private set; }
+
+    public DateTime AddedAt { get; private set; }
 
     public CollectionItem(
         int quoteId,

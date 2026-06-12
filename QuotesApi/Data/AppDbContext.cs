@@ -17,9 +17,9 @@ public class AppDbContext : DbContext
     public DbSet<User> Users => Set<User>();
     public DbSet<Quote> Quotes => Set<Quote>();
     public DbSet<Author> Authors => Set<Author>();
-
     public DbSet<Collection> Collections => Set<Collection>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    public DbSet<ProcessedMessage> ProcessedMessages => Set<ProcessedMessage>();
 
     protected override void OnModelCreating(
         ModelBuilder modelBuilder)
@@ -46,6 +46,14 @@ public class AppDbContext : DbContext
             .HasForeignKey("AuthorId")
             .IsRequired(false)
             .OnDelete(DeleteBehavior.SetNull);
+
+        // Idempotency: one record per (MessageId, Subscription) pair.
+        // Two subscriptions each receive every message so the MessageId alone is
+        // not unique across the whole table.
+        modelBuilder.Entity<ProcessedMessage>()
+            .HasIndex(m => new { m.MessageId, m.Subscription })
+            .IsUnique()
+            .HasDatabaseName("IX_ProcessedMessages_MessageId_Subscription");
 
         // Covering index: AuthorId (seek key) + Text, IsDeleted (INCLUDE columns).
         // Eliminates the Key Lookup that IX_Quotes_AuthorId alone causes — the query

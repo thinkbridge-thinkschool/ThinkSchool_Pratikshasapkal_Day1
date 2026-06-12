@@ -39,8 +39,6 @@ public class CollectionRepository : ICollectionRepository
         Collection collection,
         CancellationToken cancellationToken)
     {
-        _db.Collections.Update(collection);
-
         await _db.SaveChangesAsync(
             cancellationToken);
     }
