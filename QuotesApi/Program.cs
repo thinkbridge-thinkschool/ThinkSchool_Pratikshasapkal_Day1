@@ -21,6 +21,13 @@ using Microsoft.Extensions.Caching.Hybrid;
 using QuotesApi.Metrics;
 using QuotesApi.Options;
 using System.Diagnostics;
+using Microsoft.Extensions.Http.Resilience;
+using Polly;
+using Polly.CircuitBreaker;
+using Polly.RateLimiting;
+using Polly.Retry;
+using Polly.Timeout;
+using System.Net;
 
 
 var builder = WebApplication.CreateBuilder(args);
@@ -209,6 +216,126 @@ builder.Services.AddHybridCache(opts =>
         LocalCacheExpiration = TimeSpan.FromSeconds(cacheOpts.LocalCacheTtlSeconds),
     };
 });
+
+// ── Day 22: Resilient outbound HttpClient ─────────────────────────────────
+// Named client "unstable-api" targets a LOCAL simulator endpoint on the same
+// server.  Using localhost instead of an external service (e.g. httpstat.us)
+// guarantees sub-millisecond round-trips so the Polly timeout and circuit-
+// breaker behave predictably regardless of network conditions.
+//
+// Pipeline order (outer → inner):
+//   ConcurrencyLimiter → Retry (idempotent only) → CircuitBreaker → Timeout
+//
+// Requests flow inward; failures bubble outward.  The Retry wraps CB+Timeout,
+// so each failed attempt registers against the circuit-breaker failure ratio.
+builder.Services
+    .AddHttpClient("unstable-api", client =>
+    {
+        client.BaseAddress = new Uri("http://localhost:5032/");
+        // Disable the built-in HttpClient timeout — Polly owns every timeout.
+        client.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
+    })
+    .AddResilienceHandler("day22", (pipeline, ctx) =>
+    {
+        var log = ctx.ServiceProvider
+            .GetRequiredService<ILoggerFactory>()
+            .CreateLogger("QuotesApi.Resilience");
+
+        // ── Layer 1: Bulkhead ───────────────────────────────────────────────
+        // Caps concurrent outbound calls at 3.  QueueLimit=0 means any call
+        // beyond the 3 active slots is rejected immediately with
+        // RateLimiterRejectedException — no queuing, no waiting.
+        pipeline.AddConcurrencyLimiter(permitLimit: 3, queueLimit: 0);
+
+        // ── Layer 2: Retry (idempotent methods only) ────────────────────────
+        // Exponential back-off with jitter.  POST and PATCH are never retried:
+        // replaying a payment or a resource-creation request would cause
+        // duplicate side-effects the caller didn't ask for.
+        pipeline.AddRetry(new HttpRetryStrategyOptions
+        {
+            MaxRetryAttempts = 3,
+            Delay            = TimeSpan.FromMilliseconds(500),
+            BackoffType      = DelayBackoffType.Exponential,
+            UseJitter        = true,
+            ShouldHandle = args =>
+            {
+                // Never retry when the circuit is already open.
+                if (args.Outcome.Exception is BrokenCircuitException)
+                    return ValueTask.FromResult(false);
+
+                // Response received — gate on idempotency before retrying.
+                if (args.Outcome.Result is { } resp)
+                {
+                    var method     = resp.RequestMessage?.Method ?? HttpMethod.Get;
+                    var idempotent = method == HttpMethod.Get || method == HttpMethod.Head
+                        || method == HttpMethod.Options || method == HttpMethod.Put;
+                    if (!idempotent)
+                        return ValueTask.FromResult(false);
+
+                    return ValueTask.FromResult(
+                        (int)resp.StatusCode >= 500
+                        || resp.StatusCode == HttpStatusCode.TooManyRequests);
+                }
+
+                // No response (network error / Polly timeout) — retry transient faults.
+                return ValueTask.FromResult(
+                    args.Outcome.Exception is HttpRequestException
+                        or TimeoutRejectedException);
+            },
+            OnRetry = args =>
+            {
+                log.LogWarning(
+                    "[Retry] Attempt {N}/{Max} in {Delay:N0} ms — {Cause}",
+                    args.AttemptNumber + 1, 3,
+                    args.RetryDelay.TotalMilliseconds,
+                    args.Outcome.Exception?.GetType().Name
+                        ?? ((int?)args.Outcome.Result?.StatusCode)?.ToString() ?? "?");
+                return ValueTask.CompletedTask;
+            }
+        });
+
+        // ── Layer 3: Circuit Breaker ────────────────────────────────────────
+        // Opens when ≥ 50 % of the last 4+ requests fail within 30 s.
+        // Stays open 15 s (fast-fail every call), then half-opens for one probe.
+        pipeline.AddCircuitBreaker(new HttpCircuitBreakerStrategyOptions
+        {
+            FailureRatio      = 0.5,
+            MinimumThroughput = 4,
+            SamplingDuration  = TimeSpan.FromSeconds(30),
+            BreakDuration     = TimeSpan.FromSeconds(8),
+            OnOpened = args =>
+            {
+                log.LogError(
+                    "[CircuitBreaker] OPENED — fast-failing for {Break:N0} s. Trigger: {Cause}",
+                    args.BreakDuration.TotalSeconds,
+                    args.Outcome.Exception?.GetType().Name
+                        ?? ((int?)args.Outcome.Result?.StatusCode)?.ToString() ?? "?");
+                return ValueTask.CompletedTask;
+            },
+            OnClosed = _ =>
+            {
+                log.LogInformation("[CircuitBreaker] CLOSED — normal calls resumed.");
+                return ValueTask.CompletedTask;
+            },
+            OnHalfOpened = _ =>
+            {
+                log.LogInformation("[CircuitBreaker] HALF-OPEN — sending single probe request.");
+                return ValueTask.CompletedTask;
+            }
+        });
+
+        // ── Layer 4: Per-attempt timeout ────────────────────────────────────
+        // Cancels any single attempt that exceeds 3 s.
+        pipeline.AddTimeout(new TimeoutStrategyOptions
+        {
+            Timeout   = TimeSpan.FromSeconds(3),
+            OnTimeout = _ =>
+            {
+                log.LogWarning("[Timeout] Attempt cancelled after 3 s.");
+                return ValueTask.CompletedTask;
+            }
+        });
+    });
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddResponseCompression(opts =>
@@ -818,6 +945,126 @@ app.MapPost("/api/background/test", async (
 
     return Results.Accepted(
         value: new { jobId, status = "queued", message = "Work item enqueued." });
+});
+
+// ── Day 22: Local upstream simulator ──────────────────────────────────────
+// The "unstable-api" HttpClient calls this endpoint on localhost instead of
+// an external service.  Responses are instant and fully controlled:
+//   ?status=NNN  → returns that HTTP status code
+//   ?delay=Ms    → sleeps that many ms first (triggers the 3-s timeout)
+app.MapMethods(
+    "/api/resilience/upstream-sim",
+    ["GET", "POST", "PUT", "DELETE"],
+    async (int status = 200, int delay = 0, CancellationToken ct = default) =>
+    {
+        if (delay > 0)
+            await Task.Delay(delay, ct);
+        return Results.StatusCode(status);
+    });
+
+// ── Day 22: Resilience demonstration endpoints ─────────────────────────────
+// All endpoints call the local simulator via the "unstable-api" client.
+//
+// Query parameters:
+//   ?status=NNN  → simulator returns that HTTP status code
+//   ?delay=Ms    → simulator sleeps that many ms before responding
+
+// GET /api/resilience/probe — idempotent, retry-eligible
+app.MapGet("/api/resilience/probe", async (
+    IHttpClientFactory httpFactory,
+    ILoggerFactory loggerFactory,
+    int status = 200,
+    int delay  = 0,
+    CancellationToken ct = default) =>
+{
+    var log    = loggerFactory.CreateLogger("QuotesApi.Resilience");
+    var client = httpFactory.CreateClient("unstable-api");
+    var path = $"api/resilience/upstream-sim?status={status}&delay={delay}";
+
+    log.LogInformation("[Probe] GET http://localhost:5032/{Path}", path);
+
+    try
+    {
+        var response = await client.GetAsync(path, ct);
+        var body     = await response.Content.ReadAsStringAsync(ct);
+        return Results.Ok(new
+        {
+            upstream_status = (int)response.StatusCode,
+            upstream_body   = body,
+            path
+        });
+    }
+    catch (BrokenCircuitException ex)
+    {
+        log.LogError("[Probe] Fast-fail — circuit is OPEN. {Msg}", ex.Message);
+        return Results.Problem(
+            title:      "Circuit Open",
+            detail:     ex.Message,
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (TimeoutRejectedException)
+    {
+        return Results.Problem(
+            title:      "Timeout",
+            detail:     "Polly per-attempt timeout (3 s) exceeded.",
+            statusCode: StatusCodes.Status504GatewayTimeout);
+    }
+    catch (RateLimiterRejectedException)
+    {
+        return Results.Problem(
+            title:      "Bulkhead Rejected",
+            detail:     "Concurrency limit (3 slots) exceeded — reduce parallel requests.",
+            statusCode: StatusCodes.Status429TooManyRequests);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            detail:     ex.Message,
+            statusCode: StatusCodes.Status500InternalServerError);
+    }
+});
+
+// POST /api/resilience/probe — non-idempotent, NO retry
+// Proof: even when upstream returns 500, zero [Retry] lines appear in the console.
+app.MapPost("/api/resilience/probe", async (
+    IHttpClientFactory httpFactory,
+    ILoggerFactory loggerFactory,
+    int status = 500,
+    int delay  = 0,
+    CancellationToken ct = default) =>
+{
+    var log    = loggerFactory.CreateLogger("QuotesApi.Resilience");
+    var client = httpFactory.CreateClient("unstable-api");
+    var path = $"api/resilience/upstream-sim?status={status}&delay={delay}";
+
+    log.LogInformation(
+        "[Probe] POST http://localhost:5032/{Path} — non-idempotent, retry disabled", path);
+
+    try
+    {
+        var response = await client.PostAsync(path, content: null, ct);
+        var body     = await response.Content.ReadAsStringAsync(ct);
+        return Results.Ok(new
+        {
+            upstream_status = (int)response.StatusCode,
+            upstream_body   = body,
+            retry_fired     = false,
+            path
+        });
+    }
+    catch (BrokenCircuitException ex)
+    {
+        return Results.Problem(
+            title:      "Circuit Open",
+            detail:     ex.Message,
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            detail:     ex.Message,
+            statusCode: StatusCodes.Status500InternalServerError);
+    }
 });
 
 if (!app.Environment.IsEnvironment("Testing"))
